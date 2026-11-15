@@ -276,7 +276,7 @@ func serve(c serveConfig, ready chan<- string) error {
 			Handler:           h,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
-			WriteTimeout:      60 * time.Second,
+			WriteTimeout:      60 * time.Second, // must exceed githubBudget
 			IdleTimeout:       120 * time.Second,
 			ErrorLog:          nil,
 		}

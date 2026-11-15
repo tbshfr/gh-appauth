@@ -110,7 +110,12 @@ func OpenStore(path string) (*Store, error) {
 	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		fmt.Fprintf(os.Stderr, "gh-appauth-broker: WARNING: %s has mode %v; it holds private keys and should be 0600\n", path, fi.Mode().Perm())
 	}
-	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+	// The path is part of a URI, so characters that would end it are escaped.
+	// _txlock=immediate makes transactions take the write lock up front: one
+	// that reads first and then writes fails with "database is locked" if
+	// another connection wrote in between, and busy_timeout doesn't cover that.
+	dsn := "file:" + strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path) +
+		"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -204,6 +209,9 @@ func (s *Store) LoadConfig() (*ConfigRows, error) {
 		c.Apps = append(c.Apps, a)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	rows, err = s.db.Query(`SELECT name, allowed_cidrs, disabled, note, created_at FROM clients ORDER BY name`)
 	if err != nil {
@@ -225,6 +233,9 @@ func (s *Store) LoadConfig() (*ConfigRows, error) {
 		c.Clients = append(c.Clients, cl)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	rows, err = s.db.Query(`SELECT id, client, sha256, label, created_at, COALESCE(last_used_at,0) FROM client_secrets ORDER BY client, id`)
 	if err != nil {
@@ -241,6 +252,9 @@ func (s *Store) LoadConfig() (*ConfigRows, error) {
 		c.Secrets = append(c.Secrets, sr)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	rows, err = s.db.Query(`SELECT id, client, app, repos, permissions, position FROM grants ORDER BY client, position, id`)
 	if err != nil {
@@ -358,9 +372,15 @@ func (s *Store) UpdateGrant(g GrantRow) error {
 	if g.Permissions == nil {
 		g.Permissions = map[string]string{}
 	}
-	_, err := s.db.Exec(`UPDATE grants SET app=?, repos=?, permissions=? WHERE id=? AND client=?`,
+	res, err := s.db.Exec(`UPDATE grants SET app=?, repos=?, permissions=? WHERE id=? AND client=?`,
 		g.App, mustJSON(g.Repos), mustJSON(g.Permissions), g.ID, g.Client)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("client %q has no grant %d", g.Client, g.ID)
+	}
+	return nil
 }
 
 func (s *Store) DeleteGrant(client string, id int64) error {

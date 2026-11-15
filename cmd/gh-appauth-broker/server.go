@@ -24,6 +24,10 @@ const (
 	maxBody       = 64 << 10
 	minCachedLife = 10 * time.Minute
 	instCacheTTL  = time.Hour
+	// githubBudget bounds all GitHub calls of one token request. It has to
+	// stay below the server's write timeout, or the client never sees the
+	// answer to a request that did mint a token.
+	githubBudget  = 45 * time.Second
 	identityRetry = 5 * time.Minute
 )
 
@@ -71,6 +75,10 @@ type Broker struct {
 	gh    *ghClient
 	opts  Options
 	st    atomic.Pointer[state]
+
+	// reloadMu serialises Reload so that the snapshot loaded last is also the
+	// one stored last.
+	reloadMu sync.Mutex
 
 	tokenLim *limiter
 	failLim  *limiter
@@ -145,6 +153,8 @@ func (b *Broker) now() time.Time { return b.opts.Now() }
 // snapshot stays in place. Live tokens the new configuration would no longer
 // issue are revoked.
 func (b *Broker) Reload() error {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
 	rows, err := b.store.LoadConfig()
 	if err != nil {
 		return err
@@ -555,7 +565,8 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	ctx, cancel := context.WithTimeout(r.Context(), githubBudget)
+	defer cancel()
 	owner, name, _ := strings.Cut(full, "/")
 	instID, err := b.installation(ctx, app, owner, full)
 	if err != nil {

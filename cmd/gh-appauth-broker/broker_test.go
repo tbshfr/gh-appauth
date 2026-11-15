@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -620,6 +621,41 @@ func TestHealthz(t *testing.T) {
 	r := e.do("GET", "/healthz", "", "", nil, nil)
 	if r.code != 200 || string(r.body) != "ok\n" {
 		t.Fatalf("%d %q", r.code, r.body)
+	}
+}
+
+func TestStoreOddPathAndGrantUpdates(t *testing.T) {
+	// '?', '#' and '%' must not be read as the end of the path in the DSN.
+	p := filepath.Join(t.TempDir(), "a?b#c%20d", "broker.db")
+	st, err := OpenStore(p)
+	must(t, err)
+	defer st.Close()
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("database not created at the given path: %v", err)
+	}
+	must(t, st.PutApp(AppRow{Name: "app", AppID: 1, PrivateKey: "k"}))
+	must(t, st.CreateClient(ClientRow{Name: "c"}))
+	for _, r := range []string{"o/a", "o/b", "o/c"} {
+		must(t, st.AddGrant(GrantRow{Client: "c", App: "app", Repos: []string{r}}))
+	}
+	cfg, err := st.LoadConfig()
+	must(t, err)
+	first := cfg.Grants[0]
+	must(t, st.MoveGrant("c", first.ID, 1))
+	cfg, err = st.LoadConfig()
+	must(t, err)
+	if cfg.Grants[1].ID != first.ID {
+		t.Fatalf("grant not moved: %+v", cfg.Grants)
+	}
+	first.Repos = []string{"o/z"}
+	must(t, st.UpdateGrant(first))
+	first.ID = 9999
+	if err := st.UpdateGrant(first); err == nil {
+		t.Fatal("updating a missing grant reported success")
+	}
+	first.ID, first.Client = cfg.Grants[0].ID, "someone-else"
+	if err := st.UpdateGrant(first); err == nil {
+		t.Fatal("updating another client's grant reported success")
 	}
 }
 
