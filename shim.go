@@ -99,7 +99,7 @@ func cmdShim(args []string, stdout io.Writer) error {
 	if err := saveConfig(cfg); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "installed %s (real gh: %s)\nput %s first in PATH for the agent, e.g.\n  export PATH=%s:$PATH\n", target, real, dir, shellQuote(dir))
+	fmt.Fprintf(stdout, "installed %s (real gh: %s)\nput %s first in PATH for the agent by adding this to its shell profile (e.g. ~/.bashrc):\n  export PATH=%s:\"$PATH\"\nthen open a new shell; `type -a gh` should list %s first.\n", target, real, dir, shellQuote(dir), target)
 	fmt.Fprintln(stdout, "Make sure the agent's user has no `gh auth login` session, so commands without a repo fail instead of using your account.")
 	return nil
 }

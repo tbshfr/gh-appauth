@@ -53,9 +53,11 @@ gh extension install tbshfr/gh-appauth           # or: go build && gh extension 
 gh appauth setup --broker https://broker.lan:8443 --fingerprint AB:CD:…   # paste the secret
 gh appauth git-setup                              # git uses the broker for https://github.com
 gh appauth shim ~/.local/gh-appauth-bin           # optional: plain `gh` uses App tokens
-export PATH=~/.local/gh-appauth-bin:$PATH         # in the agent's environment
+echo 'export PATH="$HOME/.local/gh-appauth-bin:$PATH"' >> ~/.bashrc   # see below
 gh appauth status
 ```
+
+The shim only takes effect where its folder comes before the real `gh` in `PATH`. Exporting `PATH` in your current shell lasts until that shell exits, so put it in the agent user's shell profile (`~/.bashrc`, `~/.zshrc`, or the environment of the service that starts the agent), then open a new shell. `type -a gh` should list the shim's folder first.
 
 `setup` reads the secret from stdin, checks it against the broker, and prints the grants it found. If the broker's certificate isn't trusted yet, `setup` prints its fingerprint so you can compare it with the one from step 1.
 
