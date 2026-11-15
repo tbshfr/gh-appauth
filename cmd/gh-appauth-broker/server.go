@@ -110,10 +110,15 @@ func NewBroker(store *Store, opts Options) (*Broker, error) {
 	if opts.HistoryDays == 0 {
 		opts.HistoryDays = 30
 	}
-	hc := opts.HTTPClient
-	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
+	hc := &http.Client{Timeout: 30 * time.Second}
+	if opts.HTTPClient != nil {
+		c := *opts.HTTPClient
+		hc = &c
 	}
+	// GitHub redirects requests for renamed or transferred repositories.
+	// Following one would answer for a different repository, possibly under
+	// another owner, than the one the grant was checked against.
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	b := &Broker{
 		store:     store,
 		gh:        &ghClient{api: opts.GitHubAPI, http: hc, now: opts.Now},
@@ -590,6 +595,9 @@ func eventFor(code int) string {
 func ghFailure(err error, app, full string) (int, string) {
 	var ge *ghError
 	if errors.As(err, &ge) {
+		if ge.Status/100 == 3 {
+			return 403, fmt.Sprintf("%s was renamed or transferred; request it under its current name", full)
+		}
 		if ge.Status == 404 || ge.Status == 422 {
 			return 403, fmt.Sprintf("app %s is not installed on %s or lacks the requested access (GitHub: %s)", app, full, ge.Message)
 		}

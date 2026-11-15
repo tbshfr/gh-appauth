@@ -107,10 +107,18 @@ func (g *ghClient) installationID(ctx context.Context, app *appState, repoFull s
 		return 0, err
 	}
 	var out struct {
-		ID int64 `json:"id"`
+		ID      int64 `json:"id"`
+		Account struct {
+			Login string `json:"login"`
+		} `json:"account"`
 	}
 	if err := g.do(ctx, "GET", "/repos/"+repoFull+"/installation", jwt, nil, &out); err != nil {
 		return 0, err
+	}
+	// The ID is cached per owner and used for every repo of that owner, so
+	// it must really be that owner's installation.
+	if owner, _, _ := strings.Cut(repoFull, "/"); !strings.EqualFold(out.Account.Login, owner) {
+		return 0, &ghError{Status: 404, Message: fmt.Sprintf("installation %d belongs to %q, not %q", out.ID, out.Account.Login, owner)}
 	}
 	return out.ID, nil
 }

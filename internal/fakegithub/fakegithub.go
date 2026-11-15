@@ -45,13 +45,16 @@ type issued struct {
 }
 
 type Server struct {
-	mu            sync.Mutex
-	apps          map[int64]*App
-	calls         []Call
-	tokens        map[string]issued
-	jwtErrors     []string
-	n             int
-	FailIdentity  bool
+	mu           sync.Mutex
+	apps         map[int64]*App
+	calls        []Call
+	tokens       map[string]issued
+	jwtErrors    []string
+	n            int
+	FailIdentity bool
+	// Redirects maps a lowercase request path to the path it 301s to, the
+	// way GitHub answers for renamed or transferred repositories.
+	Redirects     map[string]string
 	TokenLifetime time.Duration
 }
 
@@ -110,6 +113,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.calls = append(s.calls, Call{Method: r.Method, Path: path, Body: string(body)})
 	s.mu.Unlock()
 
+	if to, ok := s.Redirects[path]; ok {
+		http.Redirect(w, r, to, http.StatusMovedPermanently)
+		return
+	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	switch {
 	case r.Method == "GET" && path == "/app":

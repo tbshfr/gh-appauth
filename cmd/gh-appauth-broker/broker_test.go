@@ -331,6 +331,24 @@ func TestForbidden(t *testing.T) {
 	}
 }
 
+func TestMovedRepoIsNotFollowed(t *testing.T) {
+	e := newEnv(t, nil)
+	must(t, e.store.AddGrant(GrantRow{Client: "bob", App: "backend-bot", Repos: []string{"other/*"}}))
+	must(t, e.b.Reload())
+	// other/moved now lives at acme/web. Following the redirect would cache
+	// acme's installation under "other" and mint for acme with other/* grants.
+	e.gh.Redirects = map[string]string{"/repos/other/moved/installation": "/repos/acme/web/installation"}
+	if r := e.token(secretB, "other/moved", nil); r.code != 403 || !strings.Contains(r.err, "renamed or transferred") {
+		t.Fatalf("moved repo: %d %s", r.code, r.err)
+	}
+	if r := e.token(secretB, "other/web", nil); r.code != 403 {
+		t.Fatalf("repo of the same owner after a moved lookup: %d %s", r.code, r.err)
+	}
+	if n := e.gh.CallCount("POST /app/installations/"); n != 0 {
+		t.Fatalf("%d mint call(s) for an owner without an installation", n)
+	}
+}
+
 func TestBadRequests(t *testing.T) {
 	e := newEnv(t, nil)
 	for _, repo := range []string{"acme/../../app", "acme/x/y", "acme", "", "acme/web?x=1"} {
