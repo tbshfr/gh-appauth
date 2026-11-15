@@ -6,9 +6,12 @@ Wants=network-online.target
 [Service]
 # DynamicUser makes the binary's directory read-only for the service, so point
 # the database at the StateDirectory instead of the default data/ next to it.
-ExecStart=/usr/local/bin/gh-appauth-broker serve -data-dir /var/lib/gh-appauth-broker -listen 0.0.0.0:8443 -tls self
+# The admin UI is on loopback so agents, which can reach the API port, can't
+# reach the login page. To open it from another machine, change -ui-listen to
+# 0.0.0.0:8444 and firewall that port so only your workstation can reach it.
+ExecStart=/usr/local/bin/gh-appauth-broker serve -data-dir /var/lib/gh-appauth-broker -listen 0.0.0.0:8443 -ui-listen 127.0.0.1:8444 -tls self
 # Options:
-#   -ui-listen 127.0.0.1:8444     admin UI on its own port (or "off")
+#   -ui-listen ""                 admin UI under /ui/ on the API port (or "off")
 #   -tls files -tls-cert /etc/gh-appauth/tls/fullchain.pem -tls-key /etc/gh-appauth/tls/privkey.pem
 #                                 (the files must be readable by the dynamic user)
 #   -tls off                      plain HTTP (trusted network only)

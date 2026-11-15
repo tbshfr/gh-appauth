@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -31,6 +32,9 @@ type uiClient struct {
 	c    *http.Client
 	csrf string
 }
+
+// flashErr marks an error notice on a rendered page.
+const flashErr = `class="flash err"`
 
 var csrfRE = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
 
@@ -85,8 +89,8 @@ func TestUILoginAndCSRF(t *testing.T) {
 	if _, body := u.get("/ui/"); !strings.Contains(body, `name="password"`) {
 		t.Fatal("unauthenticated dashboard should redirect to login")
 	}
-	if _, final, _ := u.post("/ui/login", url.Values{"password": {"wrong"}}); !strings.Contains(final, "err=") {
-		t.Fatalf("wrong password not rejected: %s", final)
+	if _, _, body := u.post("/ui/login", url.Values{"password": {"wrong"}}); !strings.Contains(body, flashErr) {
+		t.Fatalf("wrong password not rejected: %s", body)
 	}
 	_, final, body := u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
 	if !strings.HasSuffix(final, "/ui/") || !strings.Contains(body, "Active tokens") {
@@ -125,12 +129,52 @@ func TestUILoginLimit(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("%d password checks ran, want 3", len(rows))
 	}
-	if _, final, _ := u.post("/ui/login", url.Values{"password": {"correct horse battery"}}); !strings.Contains(final, "err=") {
-		t.Fatalf("login allowed while limited: %s", final)
+	if _, _, body := u.post("/ui/login", url.Values{"password": {"correct horse battery"}}); !strings.Contains(body, flashErr) {
+		t.Fatalf("login allowed while limited: %s", body)
 	}
 	// Failed logins don't block API clients on the same address.
 	if c := e.do("GET", "/v1/whoami", secretA, "127.0.0.1:1", nil, nil).code; c != 200 {
 		t.Fatalf("API after failed logins: %d", c)
+	}
+}
+
+func TestUINoticesAndSecureCookie(t *testing.T) {
+	e := newEnv(t, func(o *Options) { o.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")} })
+	u := newUIClient(t, e)
+	// Text in the URL is not shown.
+	if _, body := u.get("/ui/login?err=call+this+number&msg=call+this+number"); strings.Contains(body, "call this number") {
+		t.Fatal("query string reflected on the page")
+	}
+	// A notice is shown once.
+	if _, _, body := u.post("/ui/login", url.Values{"password": {"wrong"}}); !strings.Contains(body, "wrong password") {
+		t.Fatal("notice not shown")
+	}
+	if _, body := u.get("/ui/login"); strings.Contains(body, "wrong password") {
+		t.Fatal("notice shown twice")
+	}
+	// The session cookie is Secure when a trusted proxy terminated TLS.
+	login := func(proto string) *http.Cookie {
+		req, _ := http.NewRequest("POST", u.srv.URL+"/ui/login", strings.NewReader("password=correct+horse+battery"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if proto != "" {
+			req.Header.Set("X-Forwarded-Proto", proto)
+		}
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		must(t, err)
+		resp.Body.Close()
+		for _, c := range resp.Cookies() {
+			if c.Name == sessionCookie {
+				return c
+			}
+		}
+		t.Fatal("no session cookie")
+		return nil
+	}
+	if !login("https").Secure {
+		t.Fatal("cookie not Secure behind a TLS-terminating proxy")
+	}
+	if login("").Secure {
+		t.Fatal("cookie Secure over plain HTTP")
 	}
 }
 
@@ -158,19 +202,19 @@ func TestUIManageClient(t *testing.T) {
 	if c := e.token(secret, "acme/web", nil).code; c != 403 {
 		t.Fatalf("before grant: %d", c)
 	}
-	_, final, _ = u.post("/ui/clients/carol/grants", url.Values{
+	_, _, body = u.post("/ui/clients/carol/grants", url.Values{
 		"app": {"frontend-bot"}, "repos": {"acme/web\nacme/site"}, "perm_contents": {"read"}, "perm_other": {"metadata=read"},
 	})
-	if strings.Contains(final, "err=") {
-		t.Fatalf("add grant: %s", final)
+	if strings.Contains(body, flashErr) {
+		t.Fatalf("add grant: %s", body)
 	}
 	r := e.token(secret, "acme/web", nil)
 	if r.code != 200 || r.tok.Permissions["contents"] != "read" {
 		t.Fatalf("after grant: %d %s", r.code, r.body)
 	}
 	// Bad grant input is rejected.
-	_, final, _ = u.post("/ui/clients/carol/grants", url.Values{"app": {"frontend-bot"}, "repos": {"acme/x/y"}})
-	if !strings.Contains(final, "err=") {
+	_, _, body = u.post("/ui/clients/carol/grants", url.Values{"app": {"frontend-bot"}, "repos": {"acme/x/y"}})
+	if !strings.Contains(body, flashErr) {
 		t.Fatal("bad pattern accepted")
 	}
 	// Active token visible on the dashboard, but the token value isn't.
@@ -214,23 +258,23 @@ func TestUIApps(t *testing.T) {
 	u.get("/ui/login")
 	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
 	u.get("/ui/apps")
-	_, final, _ := u.post("/ui/apps", url.Values{"name": {"third"}, "app_id": {"999"}, "private_key": {"not a key"}})
-	if !strings.Contains(final, "err=") {
+	_, _, body := u.post("/ui/apps", url.Values{"name": {"third"}, "app_id": {"999"}, "private_key": {"not a key"}})
+	if !strings.Contains(body, flashErr) {
 		t.Fatal("bad key accepted")
 	}
-	_, final, _ = u.post("/ui/apps", url.Values{"name": {"third"}, "app_id": {"999"}, "private_key": {key1PEM}})
-	if strings.Contains(final, "err=") {
-		t.Fatalf("save app: %s", final)
+	_, _, body = u.post("/ui/apps", url.Values{"name": {"third"}, "app_id": {"999"}, "private_key": {key1PEM}})
+	if strings.Contains(body, flashErr) {
+		t.Fatalf("save app: %s", body)
 	}
 	if e.b.st.Load().apps["third"] == nil {
 		t.Fatal("app not loaded after save")
 	}
-	_, final, _ = u.post("/ui/apps/backend-bot/test", nil)
-	if !strings.Contains(final, "works") {
-		t.Fatalf("test app: %s", final)
+	_, _, body = u.post("/ui/apps/backend-bot/test", nil)
+	if !strings.Contains(body, "works") {
+		t.Fatalf("test app: %s", body)
 	}
-	_, final, _ = u.post("/ui/apps/backend-bot/delete", nil)
-	if !strings.Contains(final, "err=") {
+	_, _, body = u.post("/ui/apps/backend-bot/delete", nil)
+	if !strings.Contains(body, flashErr) {
 		t.Fatal("deleted an app that grants use")
 	}
 	u.post("/ui/apps/third/delete", nil)
@@ -265,11 +309,11 @@ func TestUIPasswordChange(t *testing.T) {
 	u.get("/ui/login")
 	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
 	u.get("/ui/settings")
-	_, final, _ := u.post("/ui/settings/password", url.Values{"current": {"correct horse battery"}, "new": {"short"}, "confirm": {"short"}})
-	if !strings.Contains(final, "err=") {
+	_, _, body := u.post("/ui/settings/password", url.Values{"current": {"correct horse battery"}, "new": {"short"}, "confirm": {"short"}})
+	if !strings.Contains(body, flashErr) {
 		t.Fatal("short password accepted")
 	}
-	_, final, _ = u.post("/ui/settings/password", url.Values{"current": {"correct horse battery"}, "new": {"a much longer one"}, "confirm": {"a much longer one"}})
+	_, final, _ := u.post("/ui/settings/password", url.Values{"current": {"correct horse battery"}, "new": {"a much longer one"}, "confirm": {"a much longer one"}})
 	if !strings.Contains(final, "/ui/login") {
 		t.Fatalf("password change: %s", final)
 	}

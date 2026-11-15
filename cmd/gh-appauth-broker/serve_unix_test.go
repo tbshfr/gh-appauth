@@ -5,7 +5,9 @@ package main
 import (
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -117,5 +119,28 @@ func TestServeRejectsBadTLSMode(t *testing.T) {
 	err = serve(serveConfig{DB: filepath.Join(t.TempDir(), "b.db"), Listen: "127.0.0.1:0", TLSMode: tlsFiles}, nil)
 	if err == nil {
 		t.Fatal("-tls files without cert accepted")
+	}
+}
+
+func TestListenUnix(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "broker.sock")
+	for i := 0; i < 2; i++ { // the second round replaces a stale socket
+		ln, err := listenUnix(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(p)
+		if err != nil || fi.Mode().Perm() != 0o660 {
+			t.Fatalf("socket mode %v, err %v", fi.Mode().Perm(), err)
+		}
+		c, err := net.Dial("unix", p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		ln.Close()
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(p), ".sock-*")); len(left) != 0 {
+		t.Fatalf("temporary directory left behind: %v", left)
 	}
 }

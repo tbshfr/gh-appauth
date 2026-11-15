@@ -60,7 +60,7 @@ In GitHub, go to Settings → Developer settings → GitHub Apps → New GitHub 
 
 ### 3. Admin UI
 
-Open `https://BROKER:8443/ui/` and sign in. With a self-signed certificate the browser shows a warning, and you can check the fingerprint against the one from step 1. Then:
+The example unit serves the admin UI on its own port, bound to loopback (`-ui-listen 127.0.0.1:8444`), so agents that can reach the API port can't reach the login page. If the broker runs on another machine, change that to `-ui-listen 0.0.0.0:8444` in the unit and firewall the port so only your workstation can reach it. Then open `https://BROKER:8444/ui/` (or `https://localhost:8444/ui/` on the broker host) and sign in. With a self-signed certificate the browser shows a warning, and you can check the fingerprint against the one from step 1. Then:
 
 1. **Apps**: add the App with a name, its App ID and the uploaded `.pem`. Click **Test** to confirm GitHub accepts the key.
 2. **Clients**: create one client per agent or machine. The secret is shown **once**.
@@ -124,7 +124,7 @@ Clients never turn verification off. With `--fingerprint`, the certificate has t
 | History | Every token request, denial, error, revocation and invalidation, filterable by client, event and repo. |
 | Settings | Server settings (read-only), TLS fingerprint, the client setup command, password change. |
 
-The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. Failed logins are limited per source address (IPv6: per /64), separately from API authentication failures. To keep the UI away from agents, put it on its own port, for example `-ui-listen 127.0.0.1:8444`, and reach it through an SSH tunnel, or firewall that port.
+The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. The session cookie is `Secure` when the broker serves TLS, or when a trusted proxy (`-trusted-proxies`) sends `X-Forwarded-Proto: https`. Failed logins are limited per source address (IPv6: per /64), separately from API authentication failures. To keep the UI away from agents, put it on its own port, for example `-ui-listen 127.0.0.1:8444`, and reach it through an SSH tunnel, or firewall that port.
 
 ### HTTP API
 

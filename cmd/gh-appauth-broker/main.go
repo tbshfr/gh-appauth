@@ -154,15 +154,35 @@ func isLoopback(addr string) bool {
 
 func listen(addr string) (net.Listener, error) {
 	if p, ok := strings.CutPrefix(addr, "unix:"); ok {
-		_ = os.Remove(p)
-		ln, err := net.Listen("unix", p)
-		if err != nil {
-			return nil, err
-		}
-		_ = os.Chmod(p, 0o660)
-		return ln, nil
+		return listenUnix(p)
 	}
 	return net.Listen("tcp", addr)
+}
+
+// listenUnix binds the socket inside a private directory, sets its mode and
+// only then moves it to p, so it is never reachable with the wider
+// permissions the umask would give it.
+func listenUnix(p string) (net.Listener, error) {
+	dir, err := os.MkdirTemp(filepath.Dir(p), ".sock-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	tmp := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", tmp)
+	if err != nil {
+		return nil, err
+	}
+	// The listener would otherwise try to remove tmp, not p, when it closes.
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err = os.Chmod(tmp, 0o660); err == nil {
+		err = os.Rename(tmp, p)
+	}
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
 // setupURL guesses the URL clients should use, for display in the UI.

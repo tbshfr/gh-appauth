@@ -37,6 +37,7 @@ type Options struct {
 	Log             io.Writer
 	HistoryDays     int
 	// SecureCookies marks UI session cookies Secure (set when serving TLS).
+	// Behind a trusted proxy, X-Forwarded-Proto: https has the same effect.
 	SecureCookies bool
 	// Info is shown read-only on the UI settings page.
 	Info ServerInfo
@@ -333,16 +334,28 @@ func (b *Broker) isTrusted(ip netip.Addr) bool {
 	return false
 }
 
+// peerIP is the address of the directly connected peer.
+func peerIP(r *http.Request) netip.Addr {
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return ap.Addr().Unmap()
+	}
+	if r.RemoteAddr == "" || r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") {
+		return netip.MustParseAddr("127.0.0.1") // unix socket peer
+	}
+	return netip.IPv4Unspecified()
+}
+
+// viaHTTPS reports whether the browser reached the broker over HTTPS: either
+// the broker serves TLS itself, or a trusted proxy says it terminated TLS.
+func (b *Broker) viaHTTPS(r *http.Request) bool {
+	return b.opts.SecureCookies || (b.isTrusted(peerIP(r)) && r.Header.Get("X-Forwarded-Proto") == "https")
+}
+
 // clientIP returns the address used for allowed_cidrs and the audit log.
 // X-Forwarded-For is only honoured when the direct peer is a trusted proxy;
 // we then take the right-most address that is not itself a trusted proxy.
 func (b *Broker) clientIP(r *http.Request) netip.Addr {
-	ip := netip.IPv4Unspecified()
-	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		ip = ap.Addr().Unmap()
-	} else if r.RemoteAddr == "" || r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") {
-		ip = netip.MustParseAddr("127.0.0.1") // unix socket peer
-	}
+	ip := peerIP(r)
 	if !b.isTrusted(ip) {
 		return ip
 	}

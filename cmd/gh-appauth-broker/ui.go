@@ -28,6 +28,7 @@ var uiFS embed.FS
 
 const (
 	sessionCookie = "gaa_session"
+	noticeCookie  = "gaa_notice"
 	sessionTTL    = 12 * time.Hour
 	pbkdf2Iter    = 600_000
 )
@@ -289,7 +290,8 @@ func (u *ui) authed(h authedFunc) http.Handler {
 }
 
 func (u *ui) render(w http.ResponseWriter, r *http.Request, s *session, name, nav, title string, data any) {
-	p := page{Title: title, Nav: nav, Info: u.b.info(), Data: data, Msg: r.URL.Query().Get("msg"), Err: r.URL.Query().Get("err")}
+	p := page{Title: title, Nav: nav, Info: u.b.info(), Data: data}
+	p.Msg, p.Err = takeNotice(w, r)
 	if s != nil {
 		p.CSRF, p.LoggedIn = s.csrf, true
 	}
@@ -302,17 +304,42 @@ func (u *ui) render(w http.ResponseWriter, r *http.Request, s *session, name, na
 	buf.WriteTo(w)
 }
 
+// back redirects to a page that shows msg, or err if there is one. The text
+// travels in a short-lived cookie and not in the URL, so a crafted link
+// can't put words on the broker's pages.
 func back(w http.ResponseWriter, r *http.Request, to, msg string, err error) {
-	q := url.Values{}
+	kind, text := "ok", msg
 	if err != nil {
-		q.Set("err", err.Error())
-	} else if msg != "" {
-		q.Set("msg", msg)
+		kind, text = "err", err.Error()
 	}
-	if len(q) > 0 {
-		to += "?" + q.Encode()
+	if text != "" {
+		if len(text) > 1000 { // stay well below the 4 KB cookie limit
+			text = strings.ToValidUTF8(text[:1000], "") + "…"
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name: noticeCookie, Value: kind + "." + base64.RawURLEncoding.EncodeToString([]byte(text)),
+			Path: "/ui/", MaxAge: 60, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		})
 	}
 	http.Redirect(w, r, to, http.StatusSeeOther)
+}
+
+// takeNotice returns the message left by back and clears it.
+func takeNotice(w http.ResponseWriter, r *http.Request) (msg, errMsg string) {
+	c, err := r.Cookie(noticeCookie)
+	if err != nil {
+		return "", ""
+	}
+	http.SetCookie(w, &http.Cookie{Name: noticeCookie, Path: "/ui/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	kind, enc, _ := strings.Cut(c.Value, ".")
+	text, err := base64.RawURLEncoding.DecodeString(enc)
+	if err != nil {
+		return "", ""
+	}
+	if kind == "err" {
+		return "", string(text)
+	}
+	return string(text), ""
 }
 
 func (b *Broker) info() ServerInfo { return b.opts.Info }
@@ -351,7 +378,7 @@ func (u *ui) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		Secure: u.b.opts.SecureCookies, MaxAge: int(sessionTTL.Seconds()),
+		Secure: u.b.viaHTTPS(r), MaxAge: int(sessionTTL.Seconds()),
 	})
 	http.Redirect(w, r, "/ui/", http.StatusSeeOther)
 }

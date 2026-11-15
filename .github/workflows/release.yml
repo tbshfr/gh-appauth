@@ -38,7 +38,9 @@ jobs:
           echo "version=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Build release artifacts
-        run: scripts/release.sh "${{ steps.tag.outputs.version }}"
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: scripts/release.sh "$VERSION"
 
       - name: Generate changelog
         uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
