@@ -37,14 +37,15 @@ The client secret travels over the network. Use TLS (the default is a self-signe
 ### 1. Broker host
 
 ```bash
-go build -o /usr/local/bin/gh-appauth-broker ./cmd/gh-appauth-broker   # or use a release binary
-sudo useradd --system --home /var/lib/gh-appauth --shell /usr/sbin/nologin gh-appauth
-sudo install -o gh-appauth -g gh-appauth -m 0700 -d /var/lib/gh-appauth
-sudo -u gh-appauth gh-appauth-broker set-password -db /var/lib/gh-appauth/broker.db
+go build -o gh-appauth-broker ./cmd/gh-appauth-broker   # or use a release binary
+sudo install -m 0755 gh-appauth-broker /usr/local/bin/
+sudo gh-appauth-broker set-password -data-dir /var/lib/gh-appauth-broker
 sudo cp deploy/gh-appauth-broker.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now gh-appauth-broker
 journalctl -u gh-appauth-broker | grep fingerprint     # note the TLS fingerprint
 ```
+
+By default the broker keeps its database in a `data/` directory next to its binary (created with mode 0700). Use `-data-dir DIR` or `GH_APPAUTH_BROKER_DATA_DIR` to put it somewhere else. The example unit runs under `DynamicUser=`, which can't write next to the binary, so it uses `-data-dir /var/lib/gh-appauth-broker` (its `StateDirectory=`). On first start systemd moves that directory to `/var/lib/private/` and gives it to the dynamic user, which is why `set-password` runs before the service is enabled. Change the password later on the Settings page.
 
 Keep the clock in sync with chrony or systemd-timesyncd. GitHub rejects App JWTs from a clock that's more than about a minute off.
 
@@ -84,7 +85,8 @@ The agent's OS user must have **no** `gh auth login` session. Then any `gh` call
 
 ```
 gh-appauth-broker serve [flags]
-  -db FILE             SQLite database (default /var/lib/gh-appauth/broker.db, env GH_APPAUTH_BROKER_DB)
+  -data-dir DIR        directory for broker.db (default data/ next to the binary, env GH_APPAUTH_BROKER_DATA_DIR)
+  -db FILE             SQLite database file, overrides -data-dir (env GH_APPAUTH_BROKER_DB)
   -listen ADDR         API address, host:port or unix:/path (default :8443)
   -ui-listen ADDR      admin UI: ""  = under /ui/ on the API port (default)
                                  "off" = disabled
@@ -96,9 +98,10 @@ gh-appauth-broker serve [flags]
   -github-api URL      default https://api.github.com (GitHub Enterprise: https://HOST/api/v3)
   -history-days N      request history retention (default 30)
 
-gh-appauth-broker set-password -db FILE      admin UI password (stdin; ≥10 chars; logs out all sessions)
-gh-appauth-broker check -db FILE             validate stored config and keys
-gh-appauth-broker fingerprint -db FILE       self-signed certificate SHA-256
+gh-appauth-broker set-password               admin UI password (stdin; ≥10 chars; logs out all sessions)
+gh-appauth-broker check                      validate stored config and keys
+gh-appauth-broker fingerprint                self-signed certificate SHA-256
+(all of these also take -data-dir DIR or -db FILE)
 ```
 
 ### TLS modes

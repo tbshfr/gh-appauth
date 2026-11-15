@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,6 +99,9 @@ type Store struct {
 // private keys, so it is created 0600 and a warning is printed if it is
 // readable by anyone else.
 func OpenStore(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
 	if f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600); err != nil {
 		return nil, err
 	} else {

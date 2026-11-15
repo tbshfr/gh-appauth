@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -25,13 +26,14 @@ import (
 const usage = `gh-appauth-broker: GitHub App token broker
 
 Usage:
-  gh-appauth-broker serve [flags]          run the broker (see serve -h)
-  gh-appauth-broker check -db FILE         validate the stored configuration and keys
-  gh-appauth-broker set-password -db FILE  set the admin UI password (read from stdin)
-  gh-appauth-broker fingerprint -db FILE   print the self-signed certificate fingerprint
-`
+  gh-appauth-broker serve [flags]   run the broker (see serve -h)
+  gh-appauth-broker check           validate the stored configuration and keys
+  gh-appauth-broker set-password    set the admin UI password (read from stdin)
+  gh-appauth-broker fingerprint     print the self-signed certificate fingerprint
 
-const defaultDB = "/var/lib/gh-appauth/broker.db"
+Every command takes -data-dir DIR or -db FILE. The database defaults to
+data/broker.db next to the gh-appauth-broker binary.
+`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -60,12 +62,45 @@ func main() {
 	}
 }
 
-func dbFlag(fs *flag.FlagSet) *string {
-	def := defaultDB
-	if v := os.Getenv("GH_APPAUTH_BROKER_DB"); v != "" {
-		def = v
+// dbFlag registers -data-dir and -db and returns a function that resolves the
+// database path once flags are parsed. Precedence: -db, -data-dir,
+// $GH_APPAUTH_BROKER_DB, $GH_APPAUTH_BROKER_DATA_DIR, then data/ next to the
+// binary.
+func dbFlag(fs *flag.FlagSet) func() (string, error) {
+	dataDir := fs.String("data-dir", "", "`directory` holding broker.db (env GH_APPAUTH_BROKER_DATA_DIR; default: data/ next to the binary)")
+	db := fs.String("db", "", "SQLite database `file`, overrides -data-dir (env GH_APPAUTH_BROKER_DB)")
+	return func() (string, error) {
+		switch {
+		case *db != "":
+			return *db, nil
+		case *dataDir != "":
+			return filepath.Join(*dataDir, "broker.db"), nil
+		}
+		if v := os.Getenv("GH_APPAUTH_BROKER_DB"); v != "" {
+			return v, nil
+		}
+		if v := os.Getenv("GH_APPAUTH_BROKER_DATA_DIR"); v != "" {
+			return filepath.Join(v, "broker.db"), nil
+		}
+		dir, err := defaultDataDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, "broker.db"), nil
 	}
-	return fs.String("db", def, "SQLite database `file` (env GH_APPAUTH_BROKER_DB)")
+}
+
+func defaultDataDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locating the broker binary for the default data directory (pass -data-dir): %w", err)
+	}
+	// Resolve symlinks so a link in /usr/local/bin still finds the data next to
+	// the real binary.
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = r
+	}
+	return filepath.Join(filepath.Dir(exe), "data"), nil
 }
 
 type serveConfig struct {
@@ -95,7 +130,10 @@ func cmdServe(args []string) error {
 	fs.StringVar(&c.GitHubAPI, "github-api", "https://api.github.com", "GitHub API base `URL`")
 	fs.IntVar(&c.HistoryDays, "history-days", 30, "keep request history for this many `days`")
 	fs.Parse(args)
-	c.DB = *db
+	var err error
+	if c.DB, err = db(); err != nil {
+		return err
+	}
 	return serve(c, nil)
 }
 
@@ -326,12 +364,16 @@ func ipStrings(ips []net.IP) []string {
 
 func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
-	db := dbFlag(fs)
+	dbPath := dbFlag(fs)
 	fs.Parse(args)
-	if _, err := os.Stat(*db); err != nil {
+	db, err := dbPath()
+	if err != nil {
 		return err
 	}
-	st, err := OpenStore(*db)
+	if _, err := os.Stat(db); err != nil {
+		return err
+	}
+	st, err := OpenStore(db)
 	if err != nil {
 		return err
 	}
@@ -351,7 +393,7 @@ func cmdCheck(args []string) error {
 
 func cmdFingerprint(args []string) error {
 	fs := flag.NewFlagSet("fingerprint", flag.ExitOnError)
-	db := dbFlag(fs)
+	dbPath := dbFlag(fs)
 	certFile := fs.String("tls-cert", "", "print the fingerprint of this certificate file instead")
 	fs.Parse(args)
 	var certPEM []byte
@@ -362,7 +404,11 @@ func cmdFingerprint(args []string) error {
 		}
 		certPEM = b
 	} else {
-		st, err := OpenStore(*db)
+		db, err := dbPath()
+		if err != nil {
+			return err
+		}
+		st, err := OpenStore(db)
 		if err != nil {
 			return err
 		}
@@ -383,8 +429,12 @@ func cmdFingerprint(args []string) error {
 
 func cmdSetPassword(args []string) error {
 	fs := flag.NewFlagSet("set-password", flag.ExitOnError)
-	db := dbFlag(fs)
+	dbPath := dbFlag(fs)
 	fs.Parse(args)
+	db, err := dbPath()
+	if err != nil {
+		return err
+	}
 	pw, err := readPassword("New admin password: ")
 	if err != nil {
 		return err
@@ -401,7 +451,7 @@ func cmdSetPassword(args []string) error {
 	if len(pw) < 10 {
 		return errors.New("password must be at least 10 characters")
 	}
-	st, err := OpenStore(*db)
+	st, err := OpenStore(db)
 	if err != nil {
 		return err
 	}
