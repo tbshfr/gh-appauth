@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -100,6 +101,36 @@ func TestUILoginAndCSRF(t *testing.T) {
 	u.post("/ui/logout", nil)
 	if _, body := u.get("/ui/clients"); !strings.Contains(body, `name="password"`) {
 		t.Fatal("session survived logout")
+	}
+}
+
+func TestUILoginLimit(t *testing.T) {
+	e := newEnv(t, func(o *Options) { o.FailsPerMinute = 3 })
+	u := newUIClient(t, e)
+	// Parallel guesses can't outrun the limit.
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := http.PostForm(u.srv.URL+"/ui/login", url.Values{"password": {"wrong"}})
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+	}
+	wg.Wait()
+	rows, err := e.store.Requests(RequestFilter{Event: "denied", Limit: 100})
+	must(t, err)
+	if len(rows) != 3 {
+		t.Fatalf("%d password checks ran, want 3", len(rows))
+	}
+	if _, final, _ := u.post("/ui/login", url.Values{"password": {"correct horse battery"}}); !strings.Contains(final, "err=") {
+		t.Fatalf("login allowed while limited: %s", final)
+	}
+	// Failed logins don't block API clients on the same address.
+	if c := e.do("GET", "/v1/whoami", secretA, "127.0.0.1:1", nil, nil).code; c != 200 {
+		t.Fatalf("API after failed logins: %d", c)
 	}
 }
 

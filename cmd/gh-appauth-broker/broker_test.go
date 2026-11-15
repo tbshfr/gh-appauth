@@ -432,6 +432,40 @@ func TestRateLimits(t *testing.T) {
 	if c := e.do("GET", "/v1/whoami", secretA, "10.7.7.8:1", nil, nil).code; c != 200 {
 		t.Fatalf("other IP: %d", c)
 	}
+	// Refused attempts leave no history rows, so a flood can't fill the database.
+	rows, err := e.store.Requests(RequestFilter{Event: "denied", Limit: 100})
+	must(t, err)
+	n := 0
+	for _, r := range rows {
+		if r.IP == "10.7.7.7" {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Fatalf("history rows for the blocked IP = %d, want 3", n)
+	}
+}
+
+func TestFailLimitSuccessAndIPv6(t *testing.T) {
+	e := newEnv(t, func(o *Options) { o.FailsPerMinute = 3 })
+	// Successful requests don't use up the failure budget.
+	for i := 0; i < 10; i++ {
+		if c := e.do("GET", "/v1/whoami", secretA, "10.7.7.7:1", nil, nil).code; c != 200 {
+			t.Fatalf("request %d: %d", i, c)
+		}
+	}
+	// Addresses in one IPv6 /64 share a bucket.
+	for i, a := range []string{"[2001:db8::1]:1", "[2001:db8::2]:1", "[2001:db8::3]:1"} {
+		if c := e.do("GET", "/v1/whoami", "gaa_bad", a, nil, nil).code; c != 401 {
+			t.Fatalf("fail %d: %d", i, c)
+		}
+	}
+	if c := e.do("GET", "/v1/whoami", "gaa_bad", "[2001:db8::4]:1", nil, nil).code; c != 429 {
+		t.Fatalf("same /64: %d", c)
+	}
+	if c := e.do("GET", "/v1/whoami", "gaa_bad", "[2001:db8:0:1::1]:1", nil, nil).code; c != 401 {
+		t.Fatalf("other /64: %d", c)
+	}
 }
 
 func TestReloadRevokesAndKeepsOldOnError(t *testing.T) {

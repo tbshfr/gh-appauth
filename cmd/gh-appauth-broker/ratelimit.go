@@ -1,9 +1,21 @@
 package main
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 )
+
+// limitKey is the bucket key for a source address. IPv6 is keyed by /64
+// because a single host usually controls that whole range.
+func limitKey(ip netip.Addr) string {
+	if ip.Is6() {
+		if p, err := ip.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return ip.String()
+}
 
 // limiter is a set of token buckets keyed by string (client name or IP).
 type limiter struct {
@@ -61,12 +73,13 @@ func (l *limiter) allow(key string, now time.Time) bool {
 	return true
 }
 
-// exhausted reports whether the bucket is empty, without taking a token.
-func (l *limiter) exhausted(key string, now time.Time) bool {
+// refund returns a token taken with allow. Failure limits take a token
+// before checking a credential and refund it on success, so concurrent
+// attempts can't all slip past a check made before any of them is counted.
+func (l *limiter) refund(key string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, ok := l.buckets[key]; !ok {
-		return false
+	if b := l.get(key, now); b.tokens < l.burst {
+		b.tokens++
 	}
-	return l.get(key, now).tokens < 1
 }

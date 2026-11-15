@@ -124,7 +124,7 @@ Clients never turn verification off. With `--fingerprint`, the certificate has t
 | History | Every token request, denial, error, revocation and invalidation, filterable by client, event and repo. |
 | Settings | Server settings (read-only), TLS fingerprint, the client setup command, password change. |
 
-The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. Failed logins count toward the same per-IP limit as API authentication failures. To keep the UI away from agents, put it on its own port, for example `-ui-listen 127.0.0.1:8444`, and reach it through an SSH tunnel, or firewall that port.
+The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. Failed logins are limited per source address (IPv6: per /64), separately from API authentication failures. To keep the UI away from agents, put it on its own port, for example `-ui-listen 127.0.0.1:8444`, and reach it through an SSH tunnel, or firewall that port.
 
 ### HTTP API
 
@@ -135,7 +135,7 @@ The UI requires the admin password. Sessions last 12 hours and are stored in SQL
 | `POST /v1/invalidate` | Bearer | `{"token":"ghs_…"}`. GitHub rejected this token, so don't serve it from cache again (sent by `git credential reject`). |
 | `GET /v1/whoami` | Bearer | client name, the IP the broker sees, grants |
 
-Error codes: `400` bad body or repo name. `401` unknown or disabled secret. `403` no grant, permission escalation, wrong source IP, or the App isn't installed on that repo. `429` rate limited (60 tokens per minute per client; about 20 failed authentications per minute per IP). `502` GitHub error.
+Error codes: `400` bad body or repo name. `401` unknown or disabled secret. `403` no grant, permission escalation, wrong source IP, or the App isn't installed on that repo. `429` rate limited (60 tokens per minute per client; about 20 failed authentications per minute per IP, or per /64 for IPv6; a limited address is refused even with a valid secret). `502` GitHub error.
 
 The broker reuses a token while it has more than 10 minutes left. Installation IDs are cached per owner for an hour, and bot identities are cached too. A failed identity lookup is retried at most every 5 minutes and never fails the token request.
 

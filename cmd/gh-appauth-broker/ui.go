@@ -330,19 +330,20 @@ func (u *ui) loginPage(w http.ResponseWriter, r *http.Request) {
 
 func (u *ui) login(w http.ResponseWriter, r *http.Request) {
 	now := u.b.now()
-	ip := u.b.clientIP(r).String()
-	if u.b.failLim.exhausted(ip, now) {
+	addr := u.b.clientIP(r)
+	ip, limKey := addr.String(), limitKey(addr)
+	if !u.b.loginLim.allow(limKey, now) {
 		back(w, r, "/ui/login", "", errors.New("too many failed attempts; wait a minute"))
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	stored, _ := u.b.store.GetSetting("admin_password")
 	if stored == "" || !checkPassword(stored, r.PostFormValue("password")) {
-		u.b.failLim.allow(ip, now)
 		u.b.audit(&RequestRow{TS: now, Event: "denied", Status: 401, IP: ip, Reason: "admin UI login failed"})
 		back(w, r, "/ui/login", "", errors.New("wrong password"))
 		return
 	}
+	u.b.loginLim.refund(limKey, now)
 	id := randToken(32)
 	if err := u.b.store.CreateSession(sha256Hex(id), randToken(32), ip, now, now.Add(sessionTTL)); err != nil {
 		http.Error(w, err.Error(), 500)

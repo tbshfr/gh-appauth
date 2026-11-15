@@ -73,6 +73,9 @@ type Broker struct {
 
 	tokenLim *limiter
 	failLim  *limiter
+	// loginLim is separate from failLim so that failed API requests can't
+	// lock the admin out of the UI, or the other way round.
+	loginLim *limiter
 
 	mu        sync.Mutex
 	inst      map[string]instEntry
@@ -117,6 +120,7 @@ func NewBroker(store *Store, opts Options) (*Broker, error) {
 		opts:      opts,
 		tokenLim:  newLimiter(opts.TokensPerMinute),
 		failLim:   newLimiter(opts.FailsPerMinute),
+		loginLim:  newLimiter(opts.FailsPerMinute),
 		inst:      map[string]instEntry{},
 		ids:       map[string]*identity{},
 		keyLocks:  map[string]*keyLock{},
@@ -359,14 +363,16 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, ev *Reques
 	now := b.now()
 	ip := b.clientIP(r)
 	ev.IP = ip.String()
-	if b.failLim.exhausted(ev.IP, now) {
-		b.fail(w, ev, http.StatusTooManyRequests, "denied", "too many failed authentication attempts")
+	limKey := limitKey(ip)
+	if !b.failLim.allow(limKey, now) {
+		// Not audited: nothing here is authenticated, so a flood would
+		// otherwise grow the history and the log without bound.
+		writeJSON(w, http.StatusTooManyRequests, api.Error{Error: "too many failed authentication attempts"})
 		return nil
 	}
 	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	secret = strings.TrimSpace(secret)
 	if !ok || secret == "" {
-		b.failLim.allow(ev.IP, now)
 		b.fail(w, ev, http.StatusUnauthorized, "denied", "missing bearer secret")
 		return nil
 	}
@@ -381,10 +387,10 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, ev *Reques
 		}
 	}
 	if match == nil || match.client.Disabled {
-		b.failLim.allow(ev.IP, now)
 		b.fail(w, ev, http.StatusUnauthorized, "denied", "unknown client secret")
 		return nil
 	}
+	b.failLim.refund(limKey, now)
 	cl := match.client
 	ev.Client = cl.Name
 	if !cl.ipAllowed(ip) {
