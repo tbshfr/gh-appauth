@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -66,7 +67,7 @@ func loadFileConfig() (*Config, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if fi, err := f.Stat(); err == nil && fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := f.Stat(); err == nil && othersCanRead(fi) {
 		return nil, fmt.Errorf("%s is readable by other users (mode %v); run: chmod 600 %s", p, fi.Mode().Perm(), p)
 	}
 	if err := json.NewDecoder(f).Decode(c); err != nil {
@@ -130,6 +131,13 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// othersCanRead reports whether the mode bits give anyone but the owner
+// access. Windows has no such bits (Go reports 0666 for every writable
+// file), so there the check would reject every config file.
+func othersCanRead(fi os.FileInfo) bool {
+	return runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0
+}
+
 func isLoopbackHost(h string) bool {
 	if h == "localhost" {
 		return true
@@ -161,7 +169,7 @@ func saveConfig(c *Config) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := os.Stat(p); err == nil && othersCanRead(fi) {
 		return fmt.Errorf("%s is readable by other users (mode %v); fix with chmod 600 first", p, fi.Mode().Perm())
 	}
 	b, _ := json.MarshalIndent(c, "", "  ")

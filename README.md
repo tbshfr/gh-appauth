@@ -154,12 +154,13 @@ The broker reuses a token while it has more than 10 minutes left. Installation I
 
 The environment variables `GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_CA_FILE`, `GH_APPAUTH_FINGERPRINT` and `GH_APPAUTH_INSECURE_HTTP=1` override the config file, which is useful in containers.
 
-**Local token cache.** Tokens are cached under `$XDG_RUNTIME_DIR/gh-appauth`, or `~/.cache/gh-appauth` if that isn't set. The directory is 0700 and the files are 0600, one per repo and permission set. A cached token is reused while it has more than 10 minutes left. If the broker is **unreachable**, a cached token with more than 1 minute left is used and a warning is printed. If the broker **refuses** (401/403), the cache entry is deleted and nothing falls back, so revocation takes effect right away.
+**Local token cache.** Tokens are cached under `$XDG_RUNTIME_DIR/gh-appauth`, or `~/.cache/gh-appauth` if that isn't set. The directory is 0700 and the files are 0600, one per client secret, repo and permission set. A cached token is reused while it has more than 10 minutes left. If the broker is **unreachable** or rate limiting (429), a cached token with more than 1 minute left is used and a warning is printed. If the broker **refuses** (401/403), the cache entry is deleted and nothing falls back, so revocation takes effect right away.
 
 **Known gaps**
 - `gh repo clone owner/x` run outside a repo gets no token. Use `git clone https://github.com/owner/x` instead.
 - `gh auth status` (which T3 Code shows) may report "not logged in" even though `gh pr …` and `git push` work. It inspects stored logins, not `GH_TOKEN` for a repo.
 - SSH remotes never call the credential helper. `git-setup` warns about them.
+- On Windows the `gh` shim isn't available (it is a shell script); use `gh appauth exec -- gh …`. The config file's permissions aren't checked there.
 
 ## Operations runbook
 

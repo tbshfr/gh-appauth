@@ -24,6 +24,7 @@ type fakeBroker struct {
 	tokenCalls  int
 	invalidated []string
 	fail500     bool
+	tokenStatus int // if set, /v1/token answers with this status
 	n           int
 }
 
@@ -48,6 +49,11 @@ func newFakeBroker(t *testing.T, useTLS bool) *fakeBroker {
 			json.NewEncoder(w).Encode(api.WhoAmI{Client: "tester", IP: "127.0.0.1", Grants: []api.Grant{{App: "a", Repos: []string{"acme/*"}}}})
 		case "/v1/token":
 			fb.tokenCalls++
+			if fb.tokenStatus != 0 {
+				w.WriteHeader(fb.tokenStatus)
+				json.NewEncoder(w).Encode(api.Error{Error: "refused"})
+				return
+			}
 			var req api.TokenRequest
 			json.NewDecoder(r.Body).Decode(&req)
 			if strings.HasPrefix(req.Repository, "acme/denied") {
@@ -267,12 +273,49 @@ func TestRefusalIsNotMaskedByCache(t *testing.T) {
 	cfg, _ := loadConfig()
 	p, _ := cacheFile(cfg, "acme/web", nil)
 	writeCached(p, &api.TokenResponse{Token: "ghs_old", ExpiresAt: time.Now().Add(5 * time.Minute), Repository: "acme/web"})
-	cfg.Secret = "gaa_revoked"
+	fb.tokenStatus = 403
 	if _, _, err := getToken(cfg, "acme/web", nil); err == nil {
 		t.Fatal("a revoked client must not fall back to cached tokens")
 	}
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Fatal("cache entry should be removed after refusal")
+	}
+}
+
+func TestRateLimitKeepsCache(t *testing.T) {
+	isolate(t)
+	fb := newFakeBroker(t, true)
+	useBroker(t, fb)
+	cfg, _ := loadConfig()
+	p, _ := cacheFile(cfg, "acme/web", nil)
+	writeCached(p, &api.TokenResponse{Token: "ghs_old", ExpiresAt: time.Now().Add(5 * time.Minute), Repository: "acme/web"})
+	fb.tokenStatus = 429
+	tok, src, err := getToken(cfg, "acme/web", nil)
+	if err != nil || src != fromFallback || tok.Token != "ghs_old" {
+		t.Fatalf("rate limited with a valid cached token: %v %s", err, src)
+	}
+	// A bad request is an error, but no reason to drop the cached token.
+	fb.tokenStatus = 400
+	if _, _, err := getToken(cfg, "acme/web", nil); err == nil {
+		t.Fatal("400 was masked by the cache")
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal("cache entry removed after a 400")
+	}
+}
+
+func TestCacheIsPerClient(t *testing.T) {
+	isolate(t)
+	fb := newFakeBroker(t, true)
+	useBroker(t, fb)
+	cfg, _ := loadConfig()
+	if _, _, err := getToken(cfg, "acme/web", nil); err != nil {
+		t.Fatal(err)
+	}
+	other := *cfg
+	other.Secret = "gaa_other-client"
+	if _, src, err := getToken(&other, "acme/web", nil); err == nil {
+		t.Fatalf("another client's secret was served from %s", src)
 	}
 }
 

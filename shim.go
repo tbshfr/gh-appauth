@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/tbshfr/gh-appauth/internal/repo"
@@ -60,6 +61,9 @@ func findRealGH(exclude string) (string, error) {
 func cmdShim(args []string, stdout io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("usage: gh appauth shim DIR")
+	}
+	if runtime.GOOS == "windows" {
+		return errors.New("the gh shim is a shell script and doesn't work on Windows; use: gh appauth exec -- gh ...")
 	}
 	dir, err := filepath.Abs(args[0])
 	if err != nil {

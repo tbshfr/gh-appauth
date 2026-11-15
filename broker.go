@@ -231,7 +231,11 @@ func cacheFile(cfg *Config, repoName string, perms map[string]string) (string, e
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(strings.TrimRight(cfg.Broker, "/") + "|" + strings.ToLower(repoName) + "|" + permString(perms)))
+	// The secret stands for the client: after setup with another client's
+	// secret, tokens cached for the previous one must not be reused.
+	secret := sha256.Sum256([]byte(cfg.Secret))
+	sum := sha256.Sum256([]byte(strings.TrimRight(cfg.Broker, "/") + "|" + hex.EncodeToString(secret[:]) + "|" +
+		strings.ToLower(repoName) + "|" + permString(perms)))
 	return filepath.Join(d, hex.EncodeToString(sum[:])+".json"), nil
 }
 
@@ -310,8 +314,8 @@ var now = time.Now
 
 // getToken returns a token for repoName, using the local cache when the
 // cached token has more than 10 minutes left. If the broker is unreachable
-// (not if it refuses), a cached token with at least a minute left is used
-// with a warning.
+// or rate limiting (not if it refuses), a cached token with at least a
+// minute left is used with a warning.
 func getToken(cfg *Config, repoName string, perms map[string]string) (*api.TokenResponse, tokenSource, error) {
 	path, err := cacheFile(cfg, repoName, perms)
 	if err != nil {
@@ -329,8 +333,16 @@ func getToken(cfg *Config, repoName string, perms map[string]string) (*api.Token
 	if err != nil {
 		var be *brokerError
 		if errors.As(err, &be) {
-			os.Remove(path)
-			return nil, "", fmt.Errorf("denied for %s: %s", repoName, be.Msg)
+			err = fmt.Errorf("denied for %s: %s", repoName, be.Msg)
+			switch be.Status {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				os.Remove(path)
+				return nil, "", err
+			case http.StatusTooManyRequests:
+				// Says nothing about the cached token; it is still good.
+			default:
+				return nil, "", err
+			}
 		}
 		if cached != nil && cached.ExpiresAt.After(now().Add(minFallbackLife)) {
 			fmt.Fprintf(os.Stderr, "gh-appauth: warning: %v; using cached token for %s (expires %s)\n",
