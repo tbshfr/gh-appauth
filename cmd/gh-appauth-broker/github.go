@@ -123,6 +123,63 @@ func (g *ghClient) installationID(ctx context.Context, app *appState, repoFull s
 	return out.ID, nil
 }
 
+// ownerInstallationID finds the installation of app on the user or
+// organization owner (case-insensitive).
+func (g *ghClient) ownerInstallationID(ctx context.Context, app *appState, owner string) (int64, error) {
+	jwt, err := g.appJWT(app)
+	if err != nil {
+		return 0, err
+	}
+	const perPage = 100
+	for page := 1; ; page++ {
+		var out []struct {
+			ID      int64 `json:"id"`
+			Account struct {
+				Login string `json:"login"`
+			} `json:"account"`
+		}
+		if err := g.do(ctx, "GET", fmt.Sprintf("/app/installations?per_page=%d&page=%d", perPage, page), jwt, nil, &out); err != nil {
+			return 0, err
+		}
+		for _, in := range out {
+			if strings.EqualFold(in.Account.Login, owner) {
+				return in.ID, nil
+			}
+		}
+		if len(out) < perPage {
+			return 0, &ghError{Status: 404, Message: fmt.Sprintf("app is not installed on %s", owner)}
+		}
+	}
+}
+
+type ghRepo struct {
+	FullName      string `json:"full_name"`
+	DefaultBranch string `json:"default_branch"`
+	Private       bool   `json:"private"`
+	Archived      bool   `json:"archived"`
+}
+
+// installationRepos lists the repositories token can access.
+func (g *ghClient) installationRepos(ctx context.Context, token string) ([]ghRepo, error) {
+	// Each entry is a full repository object of several KB, and do reads at
+	// most 1 MB of a response.
+	const perPage = 50
+	var all []ghRepo
+	for page := 1; ; page++ {
+		var out struct {
+			TotalCount   int      `json:"total_count"`
+			Repositories []ghRepo `json:"repositories"`
+		}
+		if err := g.do(ctx, "GET", fmt.Sprintf("/installation/repositories?per_page=%d&page=%d", perPage, page), token, nil, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Repositories...)
+		if len(out.Repositories) < perPage || len(all) >= out.TotalCount {
+			return all, nil
+		}
+	}
+}
+
 type mintResult struct {
 	Token       string            `json:"token"`
 	ExpiresAt   time.Time         `json:"expires_at"`
@@ -130,13 +187,23 @@ type mintResult struct {
 }
 
 func (g *ghClient) mint(ctx context.Context, app *appState, instID int64, repoName string, perms map[string]string) (*mintResult, error) {
-	jwt, err := g.appJWT(app)
-	if err != nil {
-		return nil, err
-	}
 	body := map[string]any{"repositories": []string{repoName}}
 	if len(perms) > 0 {
 		body["permissions"] = perms
+	}
+	return g.mintBody(ctx, app, instID, body)
+}
+
+// mintListing mints a metadata-only token for every repository of the
+// installation. The broker uses it to list them and never hands it out.
+func (g *ghClient) mintListing(ctx context.Context, app *appState, instID int64) (*mintResult, error) {
+	return g.mintBody(ctx, app, instID, map[string]any{"permissions": map[string]string{"metadata": "read"}})
+}
+
+func (g *ghClient) mintBody(ctx context.Context, app *appState, instID int64, body map[string]any) (*mintResult, error) {
+	jwt, err := g.appJWT(app)
+	if err != nil {
+		return nil, err
 	}
 	var out mintResult
 	if err := g.do(ctx, "POST", fmt.Sprintf("/app/installations/%d/access_tokens", instID), jwt, body, &out); err != nil {

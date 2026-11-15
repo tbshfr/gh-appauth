@@ -437,7 +437,7 @@ func (u *ui) history(w http.ResponseWriter, r *http.Request, s *session) {
 	sort.Strings(clients)
 	u.render(w, r, s, "history", "history", "Request history", map[string]any{
 		"Rows": rows, "Filter": f, "Next": next, "Clients": clients,
-		"Events": []string{"issued", "denied", "error", "revoked", "invalidated"},
+		"Events": []string{"issued", "listed", "denied", "error", "revoked", "invalidated"},
 	})
 }
 

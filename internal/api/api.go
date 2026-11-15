@@ -38,6 +38,20 @@ type WhoAmI struct {
 	Grants []Grant `json:"grants"`
 }
 
+// Repo is one repository a client can get tokens for, as listed by
+// GET /v1/repos.
+type Repo struct {
+	FullName      string `json:"full_name"`
+	DefaultBranch string `json:"default_branch"`
+	Private       bool   `json:"private"`
+	Archived      bool   `json:"archived"`
+	App           string `json:"app"`
+}
+
+type RepoList struct {
+	Repos []Repo `json:"repos"`
+}
+
 type Error struct {
 	Error string `json:"error"`
 }

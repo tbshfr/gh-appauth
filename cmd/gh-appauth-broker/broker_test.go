@@ -2,20 +2,24 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tbshfr/gh-appauth/internal/api"
 	"github.com/tbshfr/gh-appauth/internal/fakegithub"
@@ -81,11 +85,11 @@ func newEnv(t *testing.T, mod func(*Options)) *env {
 	keys(t)
 	gh := fakegithub.New(
 		&fakegithub.App{ID: 123456, Slug: "backend-bot", BotID: 555, PublicKey: &key1.PublicKey, Installations: []*fakegithub.Installation{
-			{ID: 11, Owner: "acme", Repos: []string{"api-core", "api-auth", "web"}, Permissions: map[string]string{
+			{ID: 11, Owner: "acme", Repos: []string{"api-core", "api-auth", "web"}, Archived: []string{"api-auth"}, Permissions: map[string]string{
 				"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read", "administration": "read"}},
 		}},
 		&fakegithub.App{ID: 234567, Slug: "frontend-bot", BotID: 777, PublicKey: &key2.PublicKey, Installations: []*fakegithub.Installation{
-			{ID: 22, Owner: "acme", Permissions: map[string]string{"contents": "write", "metadata": "read"}},
+			{ID: 22, Owner: "acme", Repos: []string{"Web", "api-legacy", "site"}, Permissions: map[string]string{"contents": "write", "metadata": "read"}},
 		}},
 	)
 	ghSrv := httptest.NewServer(gh)
@@ -230,6 +234,75 @@ func TestTokenIssued(t *testing.T) {
 	rows, _ := e.store.Requests(RequestFilter{})
 	if len(rows) != 1 || rows[0].Event != "issued" || rows[0].Client != "alice" || rows[0].Repo != "acme/api-core" {
 		t.Fatalf("history = %+v", rows)
+	}
+}
+
+func TestRepos(t *testing.T) {
+	e := newEnv(t, nil)
+	list := func(secret, owner string) (resp, []api.Repo) {
+		t.Helper()
+		r := e.do("GET", "/v1/repos?owner="+owner, secret, "", nil, nil)
+		var l api.RepoList
+		if r.code == 200 {
+			must(t, json.Unmarshal(r.body, &l))
+		}
+		return r, l.Repos
+	}
+
+	// acme/web is installed for both Apps, but alice's first matching grant
+	// is frontend-bot's. backend-bot's acme/api-* grant comes first for
+	// acme/api-legacy, which only frontend-bot can access, so a token
+	// request for it would fail and it isn't listed.
+	r, repos := list(secretA, "ACME")
+	if r.code != 200 {
+		t.Fatalf("code %d: %s", r.code, r.body)
+	}
+	e.noJWTErrors()
+	want := []api.Repo{
+		{FullName: "acme/api-auth", DefaultBranch: "main", Private: true, Archived: true, App: "backend-bot"},
+		{FullName: "acme/api-core", DefaultBranch: "main", Private: true, App: "backend-bot"},
+		{FullName: "acme/Web", DefaultBranch: "main", Private: true, App: "frontend-bot"},
+	}
+	if !slices.Equal(repos, want) {
+		t.Fatalf("repos = %+v", repos)
+	}
+	bodies := mintBodies(e.gh)
+	if len(bodies) != 2 {
+		t.Fatalf("want 2 mint calls, got %d", len(bodies))
+	}
+	for _, b := range bodies {
+		if _, ok := b["repositories"]; ok || fmt.Sprint(b["permissions"]) != "map[metadata:read]" {
+			t.Fatalf("listing token minted with %v", b)
+		}
+	}
+	if n := e.gh.CallCount("DELETE /installation/token"); n != 2 {
+		t.Fatalf("listing tokens revoked %d times, want 2", n)
+	}
+	if toks, _ := e.store.ActiveTokens(e.b.now()); len(toks) != 0 {
+		t.Fatalf("listing tokens recorded as issued: %+v", toks)
+	}
+	rows, _ := e.store.Requests(RequestFilter{})
+	if len(rows) != 1 || rows[0].Event != "listed" || rows[0].Repo != "acme/*" || rows[0].Reason != "3 repos" {
+		t.Fatalf("history = %+v", rows)
+	}
+
+	if _, repos := list(secretB, "acme"); len(repos) != 1 || repos[0].FullName != "acme/api-core" {
+		t.Fatalf("bob's repos = %+v", repos)
+	}
+	// alice's nope/* grant matches, but no App is installed there.
+	if r, repos := list(secretA, "nope"); r.code != 200 || len(repos) != 0 {
+		t.Fatalf("nope: code %d, repos %+v", r.code, repos)
+	}
+	if r, _ := list(secretA, "other"); r.code != 403 || !strings.Contains(r.err, "no grant") {
+		t.Fatalf("other: code %d %s", r.code, r.body)
+	}
+	for _, owner := range []string{"", "a/b", "-x", "a%2Fb"} {
+		if r, _ := list(secretA, owner); r.code != 400 {
+			t.Fatalf("owner %q: code %d %s", owner, r.code, r.body)
+		}
+	}
+	if r, _ := list("wrong", "acme"); r.code != 401 {
+		t.Fatalf("bad secret: code %d", r.code)
 	}
 }
 
@@ -713,5 +786,39 @@ func TestNarrow(t *testing.T) {
 	}
 	if _, err := narrow(g, map[string]string{"metadata": "write"}); err == nil {
 		t.Fatal("escalation allowed")
+	}
+}
+
+func TestInstallationReposPaginates(t *testing.T) {
+	keys(t)
+	var names []string
+	for i := range 120 {
+		names = append(names, fmt.Sprintf("r%03d", i))
+	}
+	var insts []*fakegithub.Installation
+	for i := range 150 {
+		insts = append(insts, &fakegithub.Installation{ID: int64(1000 + i), Owner: fmt.Sprintf("owner%d", i), Repos: []string{"x"}})
+	}
+	insts = append(insts, &fakegithub.Installation{ID: 7, Owner: "big", Repos: names, Permissions: map[string]string{"metadata": "read"}})
+	gh := fakegithub.New(&fakegithub.App{ID: 1, Slug: "s", PublicKey: &key1.PublicKey, Installations: insts})
+	srv := httptest.NewServer(gh)
+	t.Cleanup(srv.Close)
+	g := &ghClient{api: srv.URL, http: srv.Client(), now: time.Now}
+	app := &appState{Name: "s", AppID: 1, Key: key1}
+
+	ctx := context.Background()
+	id, err := g.ownerInstallationID(ctx, app, "BIG")
+	if err != nil || id != 7 {
+		t.Fatalf("installation = %d, %v", id, err)
+	}
+	if _, err := g.ownerInstallationID(ctx, app, "missing"); err == nil || err.(*ghError).Status != 404 {
+		t.Fatalf("missing owner: %v", err)
+	}
+	res, err := g.mintListing(ctx, app, id)
+	must(t, err)
+	repos, err := g.installationRepos(ctx, res.Token)
+	must(t, err)
+	if len(repos) != 120 || repos[0].FullName != "big/r000" || repos[119].FullName != "big/r119" {
+		t.Fatalf("got %d repos", len(repos))
 	}
 }

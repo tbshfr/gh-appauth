@@ -41,7 +41,7 @@ Clients never turn verification off. With `--fingerprint`, the certificate has t
 | Dashboard | Counts for the last 24 hours, active tokens (client, repo, App, permissions, expiry, reuse count, Revoke button), recent requests. |
 | Clients | Create, disable or delete clients, IP allowlists, secrets (generate, rotate, remove), grants (ordered; first match wins), per-client tokens and history. |
 | Apps | Add or replace Apps (paste or upload a `.pem`), test them against GitHub, delete Apps that no grant uses. |
-| History | Every token request, denial, error, revocation and invalidation, filterable by client, event and repo. |
+| History | Every token request, repo listing, denial, error, revocation and invalidation, filterable by client, event and repo. |
 | Settings | Server settings (read-only), TLS fingerprint, the client setup command, password change. |
 
 The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. The session cookie is `Secure` when the broker serves TLS, or when a trusted proxy (`-trusted-proxies`) sends `X-Forwarded-Proto: https`. Failed logins are limited per source address (per /64 for IPv6), separately from API authentication failures.
@@ -56,15 +56,16 @@ To keep the UI away from agents, put it on its own port, for example `-ui-listen
 | `POST /v1/token` | `Bearer <secret>` | `{"repository":"owner/repo","permissions":{…}?}` → token, expiry, App, permissions, bot name and email |
 | `POST /v1/invalidate` | Bearer | `{"token":"ghs_…"}`. GitHub rejected this token, so don't serve it from cache again (sent by `git credential reject`). |
 | `GET /v1/whoami` | Bearer | client name, the IP the broker sees, grants |
+| `GET /v1/repos?owner=OWNER` | Bearer | `{"repos":[{"full_name","default_branch","private","archived","app"}]}`: OWNER's repos this client can get a token for, meaning its first matching grant names an App whose installation can access the repo. To list them, the broker mints a metadata-only token for each such App's whole installation and revokes it right after. That token never leaves the broker. Counts toward the token rate limit. |
 
 Error codes:
 
 | Code | Meaning |
 |---|---|
-| `400` | Bad body or repo name. |
+| `400` | Bad body, repo name or owner. |
 | `401` | Unknown or disabled secret. |
 | `403` | No grant, permission escalation, wrong source IP, or the App isn't installed on that repo. |
-| `429` | Rate limited: 60 tokens per minute per client, or about 20 failed authentications per minute per IP (per /64 for IPv6). A limited address is refused even with a valid secret. |
+| `429` | Rate limited: 60 token requests and repo listings per minute per client, or about 20 failed authentications per minute per IP (per /64 for IPv6). A limited address is refused even with a valid secret. |
 | `502` | GitHub returned an error. |
 
 ## Caching

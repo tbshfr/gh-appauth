@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -178,6 +179,19 @@ func (bc *brokerClient) whoami() (*api.WhoAmI, *http.Response, error) {
 	var w api.WhoAmI
 	resp, err := bc.do("GET", "/v1/whoami", nil, &w)
 	return &w, resp, err
+}
+
+func (bc *brokerClient) repos(owner string) (*api.RepoList, error) {
+	var l api.RepoList
+	_, err := bc.do("GET", "/v1/repos?owner="+url.QueryEscape(owner), nil, &l)
+	var be *brokerError
+	if errors.As(err, &be) && be.Status == http.StatusNotFound {
+		return nil, fmt.Errorf("broker %s can't list repos; it needs to be updated", bc.cfg.Broker)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("listing repos of %s: %w", owner, err)
+	}
+	return &l, nil
 }
 
 func (bc *brokerClient) fetchToken(repoName string, perms map[string]string) (*api.TokenResponse, error) {

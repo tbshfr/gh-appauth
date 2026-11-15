@@ -67,6 +67,16 @@ func newFakeBroker(t *testing.T, useTLS bool) *fakeBroker {
 				ExpiresAt: time.Now().Add(time.Hour).UTC(), Repository: strings.ToLower(req.Repository), App: "a",
 				Permissions: map[string]string{"contents": "write"}, BotName: "a[bot]", BotEmail: "1+a[bot]@users.noreply.github.com",
 			})
+		case "/v1/repos":
+			if r.URL.Query().Get("owner") != "acme" {
+				w.WriteHeader(403)
+				json.NewEncoder(w).Encode(api.Error{Error: "no grant"})
+				return
+			}
+			json.NewEncoder(w).Encode(api.RepoList{Repos: []api.Repo{
+				{FullName: "acme/api", DefaultBranch: "main", Private: true, App: "a"},
+				{FullName: "acme/old", DefaultBranch: "master", Archived: true, App: "a"},
+			}})
 		case "/v1/invalidate":
 			var req api.InvalidateRequest
 			json.NewDecoder(r.Body).Decode(&req)
@@ -610,6 +620,35 @@ func TestPermFlags(t *testing.T) {
 	for _, bad := range []string{"contents", "contents=rw", "=read"} {
 		if err := p.Set(bad); err == nil {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestRepos(t *testing.T) {
+	isolate(t)
+	fb := newFakeBroker(t, false)
+	useBroker(t, fb)
+	var out bytes.Buffer
+	if err := run([]string{"repos", "acme"}, nil, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if want := "acme/api\tmain\tprivate\ta\nacme/old\tmaster\tpublic, archived\ta\n"; out.String() != want {
+		t.Fatalf("output %q", out.String())
+	}
+	out.Reset()
+	if err := run([]string{"repos", "--no-archived", "--json", "acme"}, nil, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	var l api.RepoList
+	if err := json.Unmarshal(out.Bytes(), &l); err != nil || len(l.Repos) != 1 || l.Repos[0].FullName != "acme/api" {
+		t.Fatalf("json %s (%v)", out.String(), err)
+	}
+	if err := run([]string{"repos", "other"}, nil, &out, &out); err == nil || !strings.Contains(err.Error(), "no grant") {
+		t.Fatalf("other owner: %v", err)
+	}
+	for _, args := range [][]string{{"repos"}, {"repos", "a/b"}, {"repos", "a", "b"}} {
+		if err := run(args, nil, &out, &out); err == nil {
+			t.Fatalf("%v: no error", args)
 		}
 	}
 }

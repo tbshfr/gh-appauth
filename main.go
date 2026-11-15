@@ -16,9 +16,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/tbshfr/gh-appauth/internal/api"
 	"github.com/tbshfr/gh-appauth/internal/buildinfo"
 	"github.com/tbshfr/gh-appauth/internal/repo"
 )
@@ -34,6 +36,8 @@ Usage:
   gh appauth status                 show broker, client, grants and current repo
   gh appauth token [OWNER/REPO] [--perm k=v]... [--json]
                                     print a token (default repo: origin of cwd)
+  gh appauth repos OWNER [--no-archived] [--json]
+                                    list OWNER's repos this client can get tokens for
   gh appauth git-setup              configure git to use this credential helper
   gh appauth identity               set user.name/email in this repo to the App bot
   gh appauth shim DIR               install a gh wrapper in DIR (put DIR first in PATH)
@@ -83,6 +87,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return cmdStatus(stdout)
 	case "token":
 		return cmdToken(rest, stdout)
+	case "repos":
+		return cmdRepos(rest, stdout)
 	case "git-credential":
 		return cmdGitCredential(rest, stdin, stdout, stderr)
 	case "git-setup":
@@ -327,17 +333,9 @@ func cmdToken(args []string, stdout io.Writer) error {
 	perms := permFlags{}
 	fs.Var(perms, "perm", "narrow permissions, e.g. --perm contents=read (repeatable)")
 	asJSON := fs.Bool("json", false, "print the full JSON response")
-	// Allow the repo argument before or after flags.
-	var positional []string
-	for len(args) > 0 {
-		if err := fs.Parse(args); err != nil {
-			return exitCode(2)
-		}
-		if fs.NArg() == 0 {
-			break
-		}
-		positional = append(positional, fs.Arg(0))
-		args = fs.Args()[1:]
+	positional, err := parseInterspersed(fs, args)
+	if err != nil {
+		return err
 	}
 	cfg, err := loadConfig()
 	if err != nil {
@@ -366,5 +364,72 @@ func cmdToken(args []string, stdout io.Writer) error {
 		return enc.Encode(t)
 	}
 	fmt.Fprintln(stdout, t.Token)
+	return nil
+}
+
+// parseInterspersed parses fs from args and returns the positional arguments,
+// which may come before, between or after the flags.
+func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for len(args) > 0 {
+		if err := fs.Parse(args); err != nil {
+			return nil, exitCode(2)
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		positional = append(positional, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+	return positional, nil
+}
+
+// ---- repos ----
+
+func cmdRepos(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("repos", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "print the full JSON response")
+	noArchived := fs.Bool("no-archived", false, "omit archived repositories")
+	positional, err := parseInterspersed(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: gh appauth repos OWNER [--no-archived] [--json]")
+	}
+	owner := positional[0]
+	if !repo.ValidOwner(owner) {
+		return fmt.Errorf("invalid owner %q", owner)
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	bc, err := newBrokerClient(cfg)
+	if err != nil {
+		return err
+	}
+	list, err := bc.repos(owner)
+	if err != nil {
+		return err
+	}
+	if *noArchived {
+		list.Repos = slices.DeleteFunc(list.Repos, func(r api.Repo) bool { return r.Archived })
+	}
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(list)
+	}
+	for _, r := range list.Repos {
+		info := "public"
+		if r.Private {
+			info = "private"
+		}
+		if r.Archived {
+			info += ", archived"
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", r.FullName, r.DefaultBranch, info, r.App)
+	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ type Installation struct {
 	ID          int64
 	Owner       string
 	Repos       []string // repo names (without owner); nil = all repositories
+	Archived    []string // names from Repos that are archived
 	Permissions map[string]string
 }
 
@@ -41,6 +43,7 @@ type Call struct {
 
 type issued struct {
 	installation int64
+	repos        []string // nil = all repositories of the installation
 	expires      time.Time
 }
 
@@ -188,9 +191,39 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.n++
 		tok := fmt.Sprintf("ghs_fake%d_%d", s.n, time.Now().UnixNano())
 		exp := time.Now().Add(s.TokenLifetime).UTC().Truncate(time.Second)
-		s.tokens[tok] = issued{installation: inst.ID, expires: exp}
+		s.tokens[tok] = issued{installation: inst.ID, repos: req.Repositories, expires: exp}
 		s.mu.Unlock()
 		writeJSON(w, 201, map[string]any{"token": tok, "expires_at": exp.Format(time.RFC3339), "permissions": perms, "repository_selection": "selected"})
+
+	case r.Method == "GET" && path == "/app/installations":
+		app := s.authApp(w, r)
+		if app == nil {
+			return
+		}
+		var out []map[string]any
+		for _, in := range app.Installations {
+			out = append(out, map[string]any{"id": in.ID, "account": map[string]any{"login": in.Owner}})
+		}
+		writeJSON(w, 200, paginate(r, out))
+
+	case r.Method == "GET" && path == "/installation/repositories":
+		s.mu.Lock()
+		t, ok := s.tokens[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
+		s.mu.Unlock()
+		if !ok || time.Now().After(t.expires) {
+			msg(w, 401, "Bad credentials")
+			return
+		}
+		inst := s.installation(t.installation)
+		var out []map[string]any
+		for _, name := range inst.Repos {
+			if t.repos != nil && !slices.ContainsFunc(t.repos, func(r string) bool { return strings.EqualFold(r, name) }) {
+				continue
+			}
+			out = append(out, map[string]any{"name": name, "full_name": inst.Owner + "/" + name, "default_branch": "main",
+				"private": true, "archived": slices.Contains(inst.Archived, name)})
+		}
+		writeJSON(w, 200, map[string]any{"total_count": len(out), "repositories": paginate(r, out)})
 
 	case r.Method == "GET" && len(parts) == 2 && parts[0] == "users":
 		if s.FailIdentity {
@@ -221,6 +254,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		msg(w, 404, "Not Found")
 	}
+}
+
+// paginate returns the page of items that the per_page and page query
+// parameters select, with GitHub's defaults.
+func paginate(r *http.Request, items []map[string]any) []map[string]any {
+	per, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if per <= 0 {
+		per = 30
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	lo := min((page-1)*per, len(items))
+	return append([]map[string]any{}, items[lo:min(lo+per, len(items))]...)
+}
+
+func (s *Server) installation(id int64) *Installation {
+	for _, a := range s.apps {
+		for _, in := range a.Installations {
+			if in.ID == id {
+				return in
+			}
+		}
+	}
+	return nil
 }
 
 func level(s string) int {

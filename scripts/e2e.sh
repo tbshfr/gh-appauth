@@ -42,7 +42,7 @@ cat > "$WORK/fakegh.json" <<EOF
    "installations": [{"id": 11, "owner": "acme", "repos": ["api-core", "api-auth"],
      "permissions": {"contents": "write", "pull_requests": "write", "metadata": "read"}}]},
   {"id": 1002, "slug": "frontend-bot", "bot_id": 777, "private_key_file": "$WORK/app2.pem",
-   "installations": [{"id": 22, "owner": "acme", "permissions": {"contents": "write", "metadata": "read"}}]}
+   "installations": [{"id": 22, "owner": "acme", "repos": ["web", "site"], "permissions": {"contents": "write", "metadata": "read"}}]}
 ]}
 EOF
 "$BIN/fakegithub" -config "$WORK/fakegh.json" -addr-file "$WORK/fakegh.addr" 2>"$WORK/fakegh.log" &
@@ -140,6 +140,8 @@ pass "repo not in the App installation refused"
 WEBTOK=$("$EXT" token acme/web)
 { [[ "$WEBTOK" == ghs_* && "$WEBTOK" != "$TOKEN" ]]; } || fail "different repo → different App token"; pass "different repo → different App token"
 
+{ [[ "$("$EXT" repos acme | cut -f1,4 | tr '\t\n' ' ;')" == "acme/api-auth backend-bot;acme/api-core backend-bot;acme/web frontend-bot;" ]]; } || fail "repos lists granted repos"; pass "repos lists granted repos"
+
 "$EXT" identity >/dev/null
 { [[ "$(git config user.email)" == "555+backend-bot[bot]@users.noreply.github.com" ]]; } || fail "identity sets bot email"; pass "identity sets bot email"
 
@@ -178,7 +180,7 @@ NEWTOK=$("$EXT" token)
 { [[ "$NEWTOK" != "$TOKEN" ]]; } || fail "credential reject → fresh token from broker"; pass "credential reject → fresh token from broker"
 
 echo "== audit"
-{ grep -q '"event":"issued"' "$WORK/audit.log" && grep -q '"event":"denied"' "$WORK/audit.log" && grep -q '"event":"invalidated"' "$WORK/audit.log"; } || fail "audit log has issued/denied/invalidated"; pass "audit log has issued/denied/invalidated"
+{ grep -q '"event":"issued"' "$WORK/audit.log" && grep -q '"event":"denied"' "$WORK/audit.log" && grep -q '"event":"invalidated"' "$WORK/audit.log" && grep -q '"event":"listed"' "$WORK/audit.log"; } || fail "audit log has issued/denied/invalidated/listed"; pass "audit log has issued/denied/invalidated/listed"
 if grep -q "$TOKEN" "$WORK/audit.log" "$WORK/broker.log" || grep -q "$SECRET" "$WORK/audit.log" "$WORK/broker.log"; then fail "token or secret leaked to logs"; fi
 pass "no tokens or secrets in logs"
 stop_broker

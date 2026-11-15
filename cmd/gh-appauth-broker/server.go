@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -312,6 +314,7 @@ func (b *Broker) APIHandler(withUI bool) http.Handler {
 	mux.HandleFunc("POST /v1/token", b.handleToken)
 	mux.HandleFunc("POST /v1/invalidate", b.handleInvalidate)
 	mux.HandleFunc("GET /v1/whoami", b.handleWhoami)
+	mux.HandleFunc("GET /v1/repos", b.handleRepos)
 	if withUI {
 		b.ui.mount(mux)
 	}
@@ -572,7 +575,7 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), githubBudget)
 	defer cancel()
 	owner, name, _ := strings.Cut(full, "/")
-	instID, err := b.installation(ctx, app, owner, full)
+	instID, err := b.installation(ctx, app, owner, func() (int64, error) { return b.gh.installationID(ctx, app, full) })
 	if err != nil {
 		code, msg := ghFailure(err, app.Name, full)
 		b.fail(w, ev, code, eventFor(code), msg)
@@ -610,6 +613,114 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRepos lists the repositories of one owner that the client can get a
+// token for: those its first matching grant names an App for, and that this
+// App's installation can access.
+func (b *Broker) handleRepos(w http.ResponseWriter, r *http.Request) {
+	now := b.now()
+	ev := &RequestRow{TS: now}
+	cl := b.authenticate(w, r, ev)
+	if cl == nil {
+		return
+	}
+	owner := r.URL.Query().Get("owner")
+	ev.Repo = strings.ToLower(owner) + "/*"
+	if !repo.ValidOwner(owner) {
+		b.fail(w, ev, 400, "denied", fmt.Sprintf("invalid owner %q", owner))
+		return
+	}
+	owner = strings.ToLower(owner)
+	// Each listing mints a token at GitHub, so it counts like a token request.
+	if !b.tokenLim.allow(cl.Name, now) {
+		b.fail(w, ev, http.StatusTooManyRequests, "denied", "rate limit exceeded")
+		return
+	}
+	st := b.st.Load()
+	var apps []*appState
+	for _, g := range cl.Grants {
+		app := st.apps[g.App]
+		if app == nil {
+			b.fail(w, ev, 503, "error", "configuration changed, retry")
+			return
+		}
+		if !slices.Contains(apps, app) && slices.ContainsFunc(g.Repos, func(p string) bool {
+			ownerPat, _, _ := strings.Cut(p, "/")
+			ok, _ := path.Match(ownerPat, owner)
+			return ok
+		}) {
+			apps = append(apps, app)
+		}
+	}
+	if len(apps) == 0 {
+		b.fail(w, ev, 403, "denied", fmt.Sprintf("client %q has no grant for repos of %s", cl.Name, owner))
+		return
+	}
+	var names []string
+	for _, a := range apps {
+		names = append(names, a.Name)
+	}
+	ev.App = strings.Join(names, ",")
+
+	ctx, cancel := context.WithTimeout(r.Context(), githubBudget)
+	defer cancel()
+	out := api.RepoList{Repos: []api.Repo{}}
+	for _, app := range apps {
+		repos, err := b.installationRepos(ctx, app, owner)
+		var ge *ghError
+		if errors.As(err, &ge) && ge.Status == 404 {
+			continue // this App isn't installed on owner
+		}
+		if err != nil {
+			code, msg := ghFailure(err, app.Name, owner)
+			b.fail(w, ev, code, eventFor(code), msg)
+			return
+		}
+		for _, gr := range repos {
+			full := strings.ToLower(gr.FullName)
+			if o, _, _ := strings.Cut(full, "/"); o != owner || !repo.Valid(gr.FullName) {
+				continue
+			}
+			if g := cl.grantFor(full); g != nil && g.App == app.Name {
+				out.Repos = append(out.Repos, api.Repo{FullName: gr.FullName, DefaultBranch: gr.DefaultBranch,
+					Private: gr.Private, Archived: gr.Archived, App: app.Name})
+			}
+		}
+	}
+	slices.SortFunc(out.Repos, func(a, b api.Repo) int {
+		return strings.Compare(strings.ToLower(a.FullName), strings.ToLower(b.FullName))
+	})
+	ev.Event, ev.Status, ev.Reason = "listed", 200, fmt.Sprintf("%d repos", len(out.Repos))
+	b.audit(ev)
+	writeJSON(w, 200, out)
+}
+
+// installationRepos lists every repository app's installation on owner can
+// access, using a short-lived metadata token that is revoked right after.
+// That token never leaves the broker, so it isn't recorded with the issued
+// tokens.
+func (b *Broker) installationRepos(ctx context.Context, app *appState, owner string) ([]ghRepo, error) {
+	instID, err := b.installation(ctx, app, owner, func() (int64, error) { return b.gh.ownerInstallationID(ctx, app, owner) })
+	if err != nil {
+		return nil, err
+	}
+	res, err := b.gh.mintListing(ctx, app, instID)
+	if err != nil {
+		var ge *ghError
+		if errors.As(err, &ge) && ge.Status == 404 {
+			b.dropInstallation(app, owner)
+		}
+		return nil, err
+	}
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := b.gh.revoke(rctx, res.Token); err != nil {
+			fmt.Fprintf(os.Stderr, "gh-appauth-broker: revoking listing token of app %s: %v\n", app.Name, err)
+		}
+	}()
+	return b.gh.installationRepos(ctx, res.Token)
+}
+
 func eventFor(code int) string {
 	if code == 403 {
 		return "denied"
@@ -638,7 +749,9 @@ func instKey(app *appState, owner string) string {
 	return fmt.Sprintf("%s#%d|%s", app.Name, app.AppID, owner)
 }
 
-func (b *Broker) installation(ctx context.Context, app *appState, owner, full string) (int64, error) {
+// installation returns the cached installation ID of app on owner, calling
+// lookup when there is none.
+func (b *Broker) installation(ctx context.Context, app *appState, owner string, lookup func() (int64, error)) (int64, error) {
 	k := instKey(app, owner)
 	b.mu.Lock()
 	e, ok := b.inst[k]
@@ -646,7 +759,7 @@ func (b *Broker) installation(ctx context.Context, app *appState, owner, full st
 	if ok && b.now().Sub(e.fetched) < instCacheTTL {
 		return e.id, nil
 	}
-	id, err := b.gh.installationID(ctx, app, full)
+	id, err := lookup()
 	if err != nil {
 		return 0, err
 	}

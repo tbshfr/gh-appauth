@@ -15,6 +15,11 @@ const DefaultHost = "github.com"
 // splice into API URL paths (no "..", no extra slashes, no escapes).
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$`)
 
+var ownerRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
+
+// ValidOwner reports whether s is a user or organization login.
+func ValidOwner(s string) bool { return ownerRE.MatchString(s) }
+
 // Valid reports whether s is a strict "owner/repo" name.
 func Valid(s string) bool {
 	if !nameRE.MatchString(s) {
