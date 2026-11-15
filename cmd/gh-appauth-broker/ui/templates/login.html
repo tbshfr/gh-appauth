@@ -1,14 +1,24 @@
 {{define "content"}}
-<section class="card narrow">
-  <h1>Sign in</h1>
+<section class="card">
   {{if .Data.NoPassword}}
-  <p>No admin password has been set yet. On the broker host, run:</p>
-  <pre>gh-appauth-broker set-password -db {{.Info.DBPath}}</pre>
+  <header class="card-head">
+    <div>
+      <h2>Set an admin password</h2>
+      <p>No admin password has been set yet. On the broker host, run:</p>
+    </div>
+  </header>
+  <div class="card-body">
+    <pre>gh-appauth-broker set-password -db {{.Info.DBPath}}</pre>
+  </div>
   {{else}}
-  <form method="post" action="/ui/login" class="stack">
-    <label>Admin password <input type="password" name="password" autofocus required autocomplete="current-password"></label>
-    <button class="primary">Sign in</button>
-  </form>
+  <header class="card-head"><h2>Sign in</h2></header>
+  <div class="card-body">
+    <form method="post" action="/ui/login" class="form">
+      <label class="field"><span class="label">Admin password</span>
+        <input type="password" name="password" autofocus required autocomplete="current-password"></label>
+      <button class="primary">Sign in</button>
+    </form>
+  </div>
   {{end}}
 </section>
 {{end}}

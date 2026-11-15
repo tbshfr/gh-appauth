@@ -1,35 +1,68 @@
 {{define "content"}}
+<header class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="lede">How this broker is running, and how clients connect to it.</p>
+  </div>
+</header>
+
 <section class="card">
-  <h1>Server</h1>
+  <header class="card-head">
+    <div>
+      <h2>Server</h2>
+      <p>These are set with command-line flags on the broker. Restart it to change them.</p>
+    </div>
+  </header>
   <dl class="kv">
     <dt>API listen</dt><dd class="mono">{{.Info.Listen}}</dd>
     <dt>Admin UI</dt><dd class="mono">{{if .Info.UIListen}}{{.Info.UIListen}}{{else}}same as API ({{.Info.Listen}}/ui/){{end}}</dd>
-    <dt>TLS</dt><dd>{{if eq .Info.TLSMode "off"}}<span class="pill error">off</span> client secrets cross the network unencrypted{{else if eq .Info.TLSMode "self"}}self-signed{{else}}certificate files{{end}}</dd>
+    <dt>TLS</dt><dd>{{if eq .Info.TLSMode "off"}}<span class="pill error">off</span> Client secrets cross the network unencrypted.{{else if eq .Info.TLSMode "self"}}<span class="pill issued">self-signed</span>{{else}}<span class="pill issued">certificate files</span>{{end}}</dd>
     {{if .Info.TLSFingerprint}}
-    <dt>Certificate SHA-256</dt><dd><div class="copyrow"><code id="fp" class="small">{{.Info.TLSFingerprint}}</code><button data-copy="fp" class="small">Copy</button></div></dd>
+    <dt>Certificate SHA-256</dt><dd><div class="copyrow"><code id="fp">{{.Info.TLSFingerprint}}</code><button data-copy="fp">Copy</button></div></dd>
     {{end}}
-    {{if .Info.TLSHosts}}<dt>Certificate names</dt><dd class="mono small">{{join .Info.TLSHosts ", "}}</dd>{{end}}
+    {{if .Info.TLSHosts}}<dt>Certificate names</dt><dd class="mono">{{join .Info.TLSHosts ", "}}</dd>{{end}}
     <dt>Trusted proxies</dt><dd class="mono">{{if .Info.TrustedProxies}}{{join .Info.TrustedProxies ", "}}{{else}}<span class="muted">none (X-Forwarded-For ignored)</span>{{end}}</dd>
     <dt>Database</dt><dd class="mono">{{.Info.DBPath}}</dd>
   </dl>
-  <p class="small muted">These are set with command-line flags on the broker. Restart it to change them.</p>
-  <h3>Client setup</h3>
-  <pre>gh appauth setup --broker {{.Info.SetupURL}}{{if eq .Info.TLSMode "self"}} \
-  --fingerprint {{.Info.TLSFingerprint}}{{end}}{{if eq .Info.TLSMode "off"}} --insecure-http{{end}}</pre>
-  <form method="post" action="/ui/settings/reload" class="inline">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <button>Reload configuration from database</button>
-  </form>
+  <footer class="card-foot">
+    <p>Changed the database directly? Reload to pick up clients, grants and apps without a restart.</p>
+    <form method="post" action="/ui/settings/reload">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button>Reload configuration</button>
+    </form>
+  </footer>
 </section>
 
 <section class="card">
-  <h2>Change admin password</h2>
-  <form method="post" action="/ui/settings/password" class="stack narrow-form">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <label>Current password <input type="password" name="current" required autocomplete="current-password"></label>
-    <label>New password <input type="password" name="new" required minlength="10" autocomplete="new-password"></label>
-    <label>Confirm new password <input type="password" name="confirm" required minlength="10" autocomplete="new-password"></label>
-    <div><button class="primary">Change password</button></div>
-  </form>
+  <header class="card-head">
+    <div>
+      <h2>Client setup</h2>
+      <p>Run this on a client machine, then paste its secret when prompted.</p>
+    </div>
+  </header>
+  <div class="card-body">
+    <div class="codeblock">
+      <pre id="setup">gh appauth setup --broker {{.Info.SetupURL}}{{if eq .Info.TLSMode "self"}} \
+  --fingerprint {{.Info.TLSFingerprint}}{{end}}{{if eq .Info.TLSMode "off"}} --insecure-http{{end}}</pre>
+      <button class="small" data-copy="setup">Copy</button>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <header class="card-head"><h2>Change admin password</h2></header>
+  <div class="card-body">
+    <form method="post" action="/ui/settings/password" class="form narrow">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label class="field"><span class="label">Current password</span>
+        <input type="password" name="current" required autocomplete="current-password"></label>
+      <label class="field"><span class="label">New password</span>
+        <input type="password" name="new" required minlength="10" autocomplete="new-password">
+        <span class="hint">At least 10 characters.</span></label>
+      <label class="field"><span class="label">Confirm new password</span>
+        <input type="password" name="confirm" required minlength="10" autocomplete="new-password"></label>
+      <div><button class="primary">Change password</button></div>
+    </form>
+  </div>
 </section>
 {{end}}

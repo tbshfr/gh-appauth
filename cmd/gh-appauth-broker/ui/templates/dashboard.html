@@ -1,21 +1,36 @@
 {{define "content"}}
+{{$denied := index .Data.Counts "denied"}}{{$errors := index .Data.Counts "error"}}
+<header class="page-head">
+  <div>
+    <h1>Dashboard</h1>
+    <p class="lede">Live tokens and recent requests across all clients.</p>
+  </div>
+</header>
+
 <div class="stats">
-  <div class="stat"><span class="n">{{len .Data.Tokens}}</span><span class="l">active tokens</span></div>
-  <div class="stat"><span class="n">{{index .Data.Counts "issued"}}</span><span class="l">issued (24h)</span></div>
-  <div class="stat"><span class="n {{if index .Data.Counts "denied"}}warn{{end}}">{{index .Data.Counts "denied"}}</span><span class="l">denied (24h)</span></div>
-  <div class="stat"><span class="n {{if index .Data.Counts "error"}}bad{{end}}">{{index .Data.Counts "error"}}</span><span class="l">errors (24h)</span></div>
-  <div class="stat"><span class="n">{{.Data.Clients}}</span><span class="l"><a href="/ui/clients">clients</a></span></div>
-  <div class="stat"><span class="n">{{.Data.Apps}}</span><span class="l"><a href="/ui/apps">apps</a></span></div>
+  <div class="stat"><span class="stat-label">Active tokens</span><span class="stat-value">{{len .Data.Tokens}}</span></div>
+  <div class="stat"><span class="stat-label">Issued <span class="tag">24h</span></span><span class="stat-value">{{index .Data.Counts "issued"}}</span></div>
+  <div class="stat {{if $denied}}is-warn{{end}}"><span class="stat-label">Denied <span class="tag">24h</span></span><span class="stat-value">{{$denied}}</span></div>
+  <div class="stat {{if $errors}}is-bad{{end}}"><span class="stat-label">Errors <span class="tag">24h</span></span><span class="stat-value">{{$errors}}</span></div>
+  <a class="stat" href="/ui/clients"><span class="stat-label">Clients</span><span class="stat-value">{{.Data.Clients}}</span></a>
+  <a class="stat" href="/ui/apps"><span class="stat-label">Apps</span><span class="stat-value">{{.Data.Apps}}</span></a>
 </div>
 
 <section class="card">
-  <h2>Active tokens</h2>
-  <p class="muted small">Installation tokens the broker issued that haven't expired. The broker reuses a token while it has more than 10 minutes left. Revoking one invalidates it at GitHub immediately.</p>
+  <header class="card-head">
+    <div>
+      <h2>Active tokens</h2>
+      <p>Installation tokens the broker issued that haven't expired. The broker reuses a token while it has more than 10 minutes left. Revoking one invalidates it at GitHub immediately.</p>
+    </div>
+  </header>
   {{template "tokens" (dict "Tokens" .Data.Tokens "CSRF" .CSRF "Back" "/ui/")}}
 </section>
 
 <section class="card">
-  <h2>Recent requests <a class="small" href="/ui/history">full history →</a></h2>
+  <header class="card-head">
+    <h2>Recent requests</h2>
+    <a class="more" href="/ui/history">Full history →</a>
+  </header>
   {{template "events" .Data.Recent}}
 </section>
 {{end}}

@@ -1,17 +1,22 @@
 {{define "content"}}
+<header class="page-head">
+  <div>
+    <h1>GitHub Apps</h1>
+    <p class="lede">Private keys are stored in the broker database and are never shown again or sent to clients.</p>
+  </div>
+</header>
+
 <section class="card">
-  <h1>GitHub Apps</h1>
-  <p class="muted small">Private keys are stored in the broker database and are never shown again or sent to clients.</p>
-  <div class="scroll">
+  <div class="table-wrap">
   <table>
-    <thead><tr><th>Name</th><th>App ID</th><th>Used by grants</th><th>Added</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>App ID</th><th class="num">Used by grants</th><th>Added</th><th></th></tr></thead>
     <tbody>
     {{range .Data.Apps}}
     <tr>
       <td><strong>{{.Name}}</strong></td>
-      <td class="mono">{{.AppID}}</td>
-      <td>{{.Grants}}</td>
-      <td title="{{ts .CreatedAt}}">{{ago .CreatedAt}}</td>
+      <td class="mono dim">{{.AppID}}</td>
+      <td class="num">{{.Grants}}</td>
+      <td class="nowrap dim" title="{{ts .CreatedAt}}">{{ago .CreatedAt}}</td>
       <td class="actions">
         <form method="post" action="/ui/apps/{{.Name}}/test">
           <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -32,17 +37,27 @@
 </section>
 
 <section class="card">
-  <h2>Add or replace an app</h2>
-  <p class="muted small">To rotate a key, generate a new one in GitHub, save it here under the same name, then delete the old key in GitHub.</p>
-  <form method="post" action="/ui/apps" enctype="multipart/form-data" class="stack">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <div class="row">
-      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="backend-bot"></label>
-      <label>App ID <input name="app_id" required inputmode="numeric" pattern="[0-9]+" placeholder="123456"></label>
+  <header class="card-head">
+    <div>
+      <h2>Add or replace an app</h2>
+      <p>To rotate a key, generate a new one in GitHub, save it here under the same name, then delete the old key in GitHub.</p>
     </div>
-    <label>Private key file (.pem) <input type="file" name="private_key_file" accept=".pem,.key,text/plain"></label>
-    <label>…or paste the private key <textarea name="private_key" rows="5" class="mono" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></label>
-    <div><button class="primary">Save app</button></div>
-  </form>
+  </header>
+  <div class="card-body">
+    <form method="post" action="/ui/apps" enctype="multipart/form-data" class="form">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <div class="form-grid">
+        <label class="field"><span class="label">Name</span>
+          <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="backend-bot"></label>
+        <label class="field"><span class="label">App ID</span>
+          <input name="app_id" required inputmode="numeric" pattern="[0-9]+" placeholder="123456"></label>
+      </div>
+      <label class="field"><span class="label">Private key file <span class="hint">.pem</span></span>
+        <input type="file" name="private_key_file" accept=".pem,.key,text/plain"></label>
+      <label class="field"><span class="label">Or paste the private key</span>
+        <textarea name="private_key" rows="5" class="mono" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></label>
+      <div><button class="primary">Save app</button></div>
+    </form>
+  </div>
 </section>
 {{end}}
