@@ -1,0 +1,142 @@
+{{define "content"}}
+{{$c := .Data.Client}}
+<p class="crumbs"><a href="/ui/clients">Clients</a> / <strong>{{$c.Name}}</strong>
+  {{if $c.Disabled}}<span class="pill denied">disabled</span>{{end}}</p>
+
+{{if .Data.NewSecret}}
+<section class="card secret">
+  <h2>New client secret</h2>
+  <p>Copy it now. The broker keeps only its hash, so you can't view it again.</p>
+  <div class="copyrow"><code id="secret">{{.Data.NewSecret}}</code><button data-copy="secret">Copy</button></div>
+  <p class="small">On the client machine:</p>
+  <pre>gh appauth setup --broker {{.Info.SetupURL}}{{if eq .Info.TLSMode "self"}} \
+  --fingerprint {{.Info.TLSFingerprint}}{{end}}{{if eq .Info.TLSMode "off"}} --insecure-http{{end}}
+# paste the secret when prompted</pre>
+</section>
+{{end}}
+
+<section class="card">
+  <h2>Grants</h2>
+  <p class="muted small">The first grant whose repo pattern matches wins. Patterns are globs like <code>acme/api-*</code> and are matched case-insensitively. If you set no permissions, tokens get everything the App installation has.</p>
+  {{range $i, $g := $c.Grants}}
+  <form method="post" action="/ui/clients/{{$c.Name}}/grants/{{$g.ID}}" class="grant">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <div class="grant-head">
+      <span class="idx">#{{$i}}</span>
+      <label>App
+        <select name="app">{{range $.Data.Apps}}<option {{if eq . $g.App}}selected{{end}}>{{.}}</option>{{end}}</select>
+      </label>
+      <span class="spacer"></span>
+      <button class="small" name="dir" value="up" formaction="/ui/clients/{{$c.Name}}/grants/{{$g.ID}}/move" title="Move up">↑</button>
+      <button class="small" name="dir" value="down" formaction="/ui/clients/{{$c.Name}}/grants/{{$g.ID}}/move" title="Move down">↓</button>
+    </div>
+    {{template "grantfields" (dict "Repos" (lines $g.Repos) "Perms" $g.Permissions)}}
+    <div class="row-end">
+      <button class="small danger" formaction="/ui/clients/{{$c.Name}}/grants/{{$g.ID}}/delete" data-confirm="Remove this grant?">Remove</button>
+      <button class="small primary">Save grant</button>
+    </div>
+  </form>
+  {{else}}
+  <p class="empty">No grants yet, so this client can't get any tokens.</p>
+  {{end}}
+
+  <details {{if not $c.Grants}}open{{end}}>
+    <summary>Add grant</summary>
+    {{if .Data.Apps}}
+    <form method="post" action="/ui/clients/{{$c.Name}}/grants" class="grant">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <div class="grant-head">
+        <label>App <select name="app">{{range .Data.Apps}}<option>{{.}}</option>{{end}}</select></label>
+      </div>
+      {{template "grantfields" (dict "Repos" "" "Perms" (noperms))}}
+      <div class="row-end"><button class="primary small">Add grant</button></div>
+    </form>
+    {{else}}
+    <p>Add a <a href="/ui/apps">GitHub App</a> first.</p>
+    {{end}}
+  </details>
+</section>
+
+<section class="card">
+  <h2>Secrets</h2>
+  <p class="muted small">Keep two secrets during rotation: add a new one, update the client, then remove the old one.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Label</th><th>SHA-256</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+    <tbody>
+    {{range $c.Secrets}}
+    <tr>
+      <td>{{.Label}}</td>
+      <td class="mono small">{{short .SHA256}}…</td>
+      <td title="{{ts .CreatedAt}}">{{ago .CreatedAt}}</td>
+      <td title="{{ts .LastUsedAt}}">{{ago .LastUsedAt}}</td>
+      <td>
+        <form method="post" action="/ui/clients/{{$c.Name}}/secrets/{{.ID}}/delete" data-confirm="Remove this secret? Clients using it will stop working.">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="small danger">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="5" class="empty">No secrets. The client can't authenticate.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <form method="post" action="/ui/clients/{{$c.Name}}/secrets" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input name="label" placeholder="label (optional)">
+    <button>Generate new secret</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Active tokens</h2>
+  {{template "tokens" (dict "Tokens" .Data.Tokens "CSRF" .CSRF "Back" (printf "/ui/clients/%s" $c.Name))}}
+</section>
+
+<section class="card">
+  <h2>Recent requests <a class="small" href="/ui/history?client={{$c.Name}}">all →</a></h2>
+  {{template "events" .Data.History}}
+</section>
+
+<section class="card">
+  <h2>Settings</h2>
+  <form method="post" action="/ui/clients/{{$c.Name}}" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Allowed source IPs / CIDRs <span class="muted small">(one per line; empty = anywhere)</span>
+      <textarea name="allowed_cidrs" rows="3" class="mono">{{lines $c.AllowedCIDRs}}</textarea></label>
+    <label>Note <input name="note" value="{{$c.Note}}"></label>
+    <label class="check"><input type="checkbox" name="disabled" {{if $c.Disabled}}checked{{end}}> Disabled (its live tokens are revoked)</label>
+    <div><button class="primary">Save</button></div>
+  </form>
+  <hr>
+  <form method="post" action="/ui/clients/{{$c.Name}}/delete" data-confirm="Delete client {{$c.Name}}? Its secrets and grants are removed and its tokens revoked.">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="danger">Delete client</button>
+  </form>
+</section>
+{{end}}
+
+{{define "grantfields"}}
+<div class="grant-body">
+  <label>Repos <span class="muted small">(one pattern per line)</span>
+    <textarea name="repos" rows="3" class="mono" placeholder="acme/api-*&#10;acme/web" required>{{.Repos}}</textarea></label>
+  <div>
+    <div class="perm-grid">
+      {{$p := .Perms}}
+      {{range common}}
+      <label class="perm"><span class="mono small">{{.}}</span>
+        <select name="perm_{{.}}">
+          <option value="">—</option>
+          <option {{if permIs $p . "read"}}selected{{end}}>read</option>
+          <option {{if permIs $p . "write"}}selected{{end}}>write</option>
+          <option {{if permIs $p . "admin"}}selected{{end}}>admin</option>
+        </select>
+      </label>
+      {{end}}
+    </div>
+    <label class="small">Other permissions <input name="perm_other" class="mono" value="{{extraPerms $p}}" placeholder="administration=read, environments=write"></label>
+  </div>
+</div>
+{{end}}

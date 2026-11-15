@@ -1,0 +1,48 @@
+{{define "content"}}
+<section class="card">
+  <h1>GitHub Apps</h1>
+  <p class="muted small">Private keys are stored in the broker database and are never shown again or sent to clients.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Name</th><th>App ID</th><th>Used by grants</th><th>Added</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Apps}}
+    <tr>
+      <td><strong>{{.Name}}</strong></td>
+      <td class="mono">{{.AppID}}</td>
+      <td>{{.Grants}}</td>
+      <td title="{{ts .CreatedAt}}">{{ago .CreatedAt}}</td>
+      <td class="actions">
+        <form method="post" action="/ui/apps/{{.Name}}/test">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="small">Test</button>
+        </form>
+        <form method="post" action="/ui/apps/{{.Name}}/delete" data-confirm="Delete app {{.Name}}? Its tokens will be revoked.">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <button class="small danger" {{if .Grants}}disabled title="Remove the grants that use it first"{{end}}>Delete</button>
+        </form>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="5" class="empty">No apps yet. Add one below.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Add or replace an app</h2>
+  <p class="muted small">To rotate a key, generate a new one in GitHub, save it here under the same name, then delete the old key in GitHub.</p>
+  <form method="post" action="/ui/apps" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="row">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="backend-bot"></label>
+      <label>App ID <input name="app_id" required inputmode="numeric" pattern="[0-9]+" placeholder="123456"></label>
+    </div>
+    <label>Private key file (.pem) <input type="file" name="private_key_file" accept=".pem,.key,text/plain"></label>
+    <label>…or paste the private key <textarea name="private_key" rows="5" class="mono" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></label>
+    <div><button class="primary">Save app</button></div>
+  </form>
+</section>
+{{end}}

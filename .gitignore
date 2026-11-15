@@ -1,0 +1,7 @@
+/gh-appauth
+/gh-appauth-broker
+/dist/
+*.db
+*.db-wal
+*.db-shm
+*.pem

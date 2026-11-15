@@ -1,0 +1,24 @@
+# Optional: Caddy terminates TLS (automatic certificates) in front of the
+# broker. Run the broker on loopback without TLS:
+#
+#   gh-appauth-broker serve -listen 127.0.0.1:8080 -tls off \
+#       -trusted-proxies 127.0.0.1/32 -ui-listen 127.0.0.1:8081
+#
+# With -trusted-proxies set, the broker takes the client address from
+# X-Forwarded-For (needed for allowed_cidrs and the audit log).
+
+broker.example.com {
+	# Only let the agent machines in.
+	@blocked not remote_ip 192.168.1.0/24 100.64.0.0/10
+	respond @blocked 403
+
+	reverse_proxy 127.0.0.1:8080
+}
+
+# Admin UI, reachable only from your workstation.
+admin.broker.example.com {
+	@blocked not remote_ip 192.168.1.50
+	respond @blocked 403
+
+	reverse_proxy 127.0.0.1:8081
+}

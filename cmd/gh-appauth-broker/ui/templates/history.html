@@ -1,0 +1,24 @@
+{{define "content"}}
+<section class="card">
+  <h1>Request history</h1>
+  <form method="get" action="/ui/history" class="filters">
+    <label>Client
+      <select name="client">
+        <option value="">any</option>
+        {{range .Data.Clients}}<option {{if eq . $.Data.Filter.Client}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </label>
+    <label>Event
+      <select name="event">
+        <option value="">any</option>
+        {{range .Data.Events}}<option {{if eq . $.Data.Filter.Event}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </label>
+    <label>Repo contains <input name="repo" value="{{.Data.Filter.Repo}}" placeholder="acme/web"></label>
+    <button>Filter</button>
+    <a href="/ui/history" class="small">reset</a>
+  </form>
+  {{template "events" .Data.Rows}}
+  {{if .Data.Next}}<p><a href="{{.Data.Next}}">Older →</a></p>{{end}}
+</section>
+{{end}}

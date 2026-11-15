@@ -1,0 +1,21 @@
+{{define "content"}}
+<div class="stats">
+  <div class="stat"><span class="n">{{len .Data.Tokens}}</span><span class="l">active tokens</span></div>
+  <div class="stat"><span class="n">{{index .Data.Counts "issued"}}</span><span class="l">issued (24h)</span></div>
+  <div class="stat"><span class="n {{if index .Data.Counts "denied"}}warn{{end}}">{{index .Data.Counts "denied"}}</span><span class="l">denied (24h)</span></div>
+  <div class="stat"><span class="n {{if index .Data.Counts "error"}}bad{{end}}">{{index .Data.Counts "error"}}</span><span class="l">errors (24h)</span></div>
+  <div class="stat"><span class="n">{{.Data.Clients}}</span><span class="l"><a href="/ui/clients">clients</a></span></div>
+  <div class="stat"><span class="n">{{.Data.Apps}}</span><span class="l"><a href="/ui/apps">apps</a></span></div>
+</div>
+
+<section class="card">
+  <h2>Active tokens</h2>
+  <p class="muted small">Installation tokens the broker issued that haven't expired. The broker reuses a token while it has more than 10 minutes left. Revoking one invalidates it at GitHub immediately.</p>
+  {{template "tokens" (dict "Tokens" .Data.Tokens "CSRF" .CSRF "Back" "/ui/")}}
+</section>
+
+<section class="card">
+  <h2>Recent requests <a class="small" href="/ui/history">full history →</a></h2>
+  {{template "events" .Data.Recent}}
+</section>
+{{end}}

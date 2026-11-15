@@ -1,0 +1,35 @@
+{{define "content"}}
+<section class="card">
+  <h1>Server</h1>
+  <dl class="kv">
+    <dt>API listen</dt><dd class="mono">{{.Info.Listen}}</dd>
+    <dt>Admin UI</dt><dd class="mono">{{if .Info.UIListen}}{{.Info.UIListen}}{{else}}same as API ({{.Info.Listen}}/ui/){{end}}</dd>
+    <dt>TLS</dt><dd>{{if eq .Info.TLSMode "off"}}<span class="pill error">off</span> client secrets cross the network unencrypted{{else if eq .Info.TLSMode "self"}}self-signed{{else}}certificate files{{end}}</dd>
+    {{if .Info.TLSFingerprint}}
+    <dt>Certificate SHA-256</dt><dd><div class="copyrow"><code id="fp" class="small">{{.Info.TLSFingerprint}}</code><button data-copy="fp" class="small">Copy</button></div></dd>
+    {{end}}
+    {{if .Info.TLSHosts}}<dt>Certificate names</dt><dd class="mono small">{{join .Info.TLSHosts ", "}}</dd>{{end}}
+    <dt>Trusted proxies</dt><dd class="mono">{{if .Info.TrustedProxies}}{{join .Info.TrustedProxies ", "}}{{else}}<span class="muted">none (X-Forwarded-For ignored)</span>{{end}}</dd>
+    <dt>Database</dt><dd class="mono">{{.Info.DBPath}}</dd>
+  </dl>
+  <p class="small muted">These are set with command-line flags on the broker. Restart it to change them.</p>
+  <h3>Client setup</h3>
+  <pre>gh appauth setup --broker {{.Info.SetupURL}}{{if eq .Info.TLSMode "self"}} \
+  --fingerprint {{.Info.TLSFingerprint}}{{end}}{{if eq .Info.TLSMode "off"}} --insecure-http{{end}}</pre>
+  <form method="post" action="/ui/settings/reload" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button>Reload configuration from database</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Change admin password</h2>
+  <form method="post" action="/ui/settings/password" class="stack narrow-form">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Current password <input type="password" name="current" required autocomplete="current-password"></label>
+    <label>New password <input type="password" name="new" required minlength="10" autocomplete="new-password"></label>
+    <label>Confirm new password <input type="password" name="confirm" required minlength="10" autocomplete="new-password"></label>
+    <div><button class="primary">Change password</button></div>
+  </form>
+</section>
+{{end}}

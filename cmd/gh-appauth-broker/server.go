@@ -1,0 +1,624 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/netip"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/tbshfr/gh-appauth/internal/api"
+	"github.com/tbshfr/gh-appauth/internal/repo"
+)
+
+const (
+	maxBody       = 64 << 10
+	minCachedLife = 10 * time.Minute
+	instCacheTTL  = time.Hour
+	identityRetry = 5 * time.Minute
+)
+
+type Options struct {
+	GitHubAPI       string
+	TrustedProxies  []netip.Prefix
+	TokensPerMinute int
+	FailsPerMinute  int
+	HTTPClient      *http.Client
+	Now             func() time.Time
+	Log             io.Writer
+	HistoryDays     int
+	// SecureCookies marks UI session cookies Secure (set when serving TLS).
+	SecureCookies bool
+	// Info is shown read-only on the UI settings page.
+	Info ServerInfo
+}
+
+type ServerInfo struct {
+	DBPath         string
+	Listen         string
+	UIListen       string
+	TLSMode        string
+	TLSFingerprint string
+	TLSHosts       []string
+	TrustedProxies []string
+	SetupURL       string // suggested --broker URL for client setup
+}
+
+type instEntry struct {
+	id      int64
+	fetched time.Time
+}
+
+type identity struct {
+	slug    string
+	botID   int64
+	lastTry time.Time
+	done    bool
+}
+
+type Broker struct {
+	store *Store
+	gh    *ghClient
+	opts  Options
+	st    atomic.Pointer[state]
+
+	tokenLim *limiter
+	failLim  *limiter
+
+	mu        sync.Mutex
+	inst      map[string]instEntry
+	ids       map[string]*identity
+	keyLocks  map[string]*keyLock
+	lastTouch map[int64]time.Time
+
+	ui *ui
+}
+
+type keyLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func NewBroker(store *Store, opts Options) (*Broker, error) {
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Log == nil {
+		opts.Log = os.Stdout
+	}
+	if opts.TokensPerMinute == 0 {
+		opts.TokensPerMinute = 60
+	}
+	if opts.FailsPerMinute == 0 {
+		opts.FailsPerMinute = 20
+	}
+	if opts.GitHubAPI == "" {
+		opts.GitHubAPI = "https://api.github.com"
+	}
+	if opts.HistoryDays == 0 {
+		opts.HistoryDays = 30
+	}
+	hc := opts.HTTPClient
+	if hc == nil {
+		hc = &http.Client{Timeout: 30 * time.Second}
+	}
+	b := &Broker{
+		store:     store,
+		gh:        &ghClient{api: opts.GitHubAPI, http: hc, now: opts.Now},
+		opts:      opts,
+		tokenLim:  newLimiter(opts.TokensPerMinute),
+		failLim:   newLimiter(opts.FailsPerMinute),
+		inst:      map[string]instEntry{},
+		ids:       map[string]*identity{},
+		keyLocks:  map[string]*keyLock{},
+		lastTouch: map[int64]time.Time{},
+	}
+	if err := b.Reload(); err != nil {
+		return nil, err
+	}
+	b.ui = newUI(b)
+	return b, nil
+}
+
+func (b *Broker) now() time.Time { return b.opts.Now() }
+
+// Reload rebuilds the config snapshot from the database. On error the current
+// snapshot stays in place. Tokens of clients or apps that no longer exist (or
+// are disabled) are revoked.
+func (b *Broker) Reload() error {
+	rows, err := b.store.LoadConfig()
+	if err != nil {
+		return err
+	}
+	st, err := buildState(rows)
+	if err != nil {
+		return err
+	}
+	b.st.Store(st)
+	b.mu.Lock()
+	b.inst = map[string]instEntry{}
+	b.ids = map[string]*identity{}
+	b.mu.Unlock()
+
+	orphans, err := b.store.RevokeOrphans(b.now())
+	if err != nil {
+		return err
+	}
+	for _, t := range orphans {
+		b.audit(&RequestRow{TS: b.now(), Event: "revoked", Client: t.Client, Repo: t.Repo, App: t.App,
+			Perms: permString(t.Permissions), Reason: "client or app removed"})
+		go b.revokeAtGitHub(t.Token)
+	}
+	return nil
+}
+
+func (b *Broker) revokeAtGitHub(token string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := b.gh.revoke(ctx, token); err != nil {
+		fmt.Fprintf(os.Stderr, "gh-appauth-broker: revoking token at GitHub: %v\n", err)
+	}
+}
+
+// RevokeToken revokes one issued token (UI action).
+func (b *Broker) RevokeToken(id int64, reason string) error {
+	t, err := b.store.TokenByID(id)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return errors.New("no such token")
+	}
+	if err := b.store.MarkRevoked(id, reason, b.now()); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ghErr := b.gh.revoke(ctx, t.Token)
+	ev := &RequestRow{TS: b.now(), Event: "revoked", Client: t.Client, Repo: t.Repo, App: t.App, Perms: permString(t.Permissions), Reason: reason}
+	if ghErr != nil {
+		ev.Reason += " (GitHub revoke failed: " + ghErr.Error() + ")"
+	}
+	b.audit(ev)
+	return ghErr
+}
+
+// ---- audit ----
+
+type auditLine struct {
+	TS     string `json:"ts"`
+	Event  string `json:"event"`
+	Status int    `json:"status,omitempty"`
+	Client string `json:"client,omitempty"`
+	IP     string `json:"ip,omitempty"`
+	Repo   string `json:"repo,omitempty"`
+	App    string `json:"app,omitempty"`
+	Perms  string `json:"perms,omitempty"`
+	Cached bool   `json:"cached"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func (b *Broker) audit(ev *RequestRow) {
+	line, _ := json.Marshal(auditLine{
+		TS: ev.TS.UTC().Format(time.RFC3339), Event: ev.Event, Status: ev.Status, Client: ev.Client, IP: ev.IP,
+		Repo: ev.Repo, App: ev.App, Perms: ev.Perms, Cached: ev.Cached, Reason: ev.Reason,
+	})
+	b.mu.Lock()
+	b.opts.Log.Write(append(line, '\n'))
+	b.mu.Unlock()
+	if err := b.store.InsertRequest(ev); err != nil {
+		fmt.Fprintf(os.Stderr, "gh-appauth-broker: writing request history: %v\n", err)
+	}
+}
+
+// PruneLoop deletes request history older than HistoryDays, hourly.
+func (b *Broker) PruneLoop(ctx context.Context) {
+	for {
+		if n, err := b.store.PruneRequests(b.now().AddDate(0, 0, -b.opts.HistoryDays)); err != nil {
+			fmt.Fprintf(os.Stderr, "gh-appauth-broker: pruning history: %v\n", err)
+		} else if n > 0 {
+			fmt.Fprintf(os.Stderr, "gh-appauth-broker: pruned %d history rows\n", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
+}
+
+// ---- HTTP ----
+
+// APIHandler serves /healthz and /v1/*. If withUI is set, the admin UI is
+// mounted under /ui/ as well.
+func (b *Broker) APIHandler(withUI bool) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, "ok\n")
+	})
+	mux.HandleFunc("POST /v1/token", b.handleToken)
+	mux.HandleFunc("POST /v1/invalidate", b.handleInvalidate)
+	mux.HandleFunc("GET /v1/whoami", b.handleWhoami)
+	if withUI {
+		b.ui.mount(mux)
+	}
+	return mux
+}
+
+// UIHandler serves only the admin UI (for a separate -ui-listen address).
+func (b *Broker) UIHandler() http.Handler {
+	mux := http.NewServeMux()
+	b.ui.mount(mux)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok\n") })
+	return mux
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (b *Broker) fail(w http.ResponseWriter, ev *RequestRow, code int, event, reason string) {
+	ev.Event, ev.Status, ev.Reason = event, code, reason
+	b.audit(ev)
+	writeJSON(w, code, api.Error{Error: reason})
+}
+
+func (b *Broker) isTrusted(ip netip.Addr) bool {
+	for _, p := range b.opts.TrustedProxies {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientIP returns the address used for allowed_cidrs and the audit log.
+// X-Forwarded-For is only honoured when the direct peer is a trusted proxy;
+// we then take the right-most address that is not itself a trusted proxy.
+func (b *Broker) clientIP(r *http.Request) netip.Addr {
+	ip := netip.IPv4Unspecified()
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		ip = ap.Addr().Unmap()
+	} else if r.RemoteAddr == "" || r.RemoteAddr == "@" || strings.HasPrefix(r.RemoteAddr, "/") {
+		ip = netip.MustParseAddr("127.0.0.1") // unix socket peer
+	}
+	if !b.isTrusted(ip) {
+		return ip
+	}
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return ip
+		}
+		a = a.Unmap()
+		if !b.isTrusted(a) {
+			return a
+		}
+		ip = a
+	}
+	return ip
+}
+
+func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, ev *RequestRow) *clientState {
+	now := b.now()
+	ip := b.clientIP(r)
+	ev.IP = ip.String()
+	if b.failLim.exhausted(ev.IP, now) {
+		b.fail(w, ev, http.StatusTooManyRequests, "denied", "too many failed authentication attempts")
+		return nil
+	}
+	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	secret = strings.TrimSpace(secret)
+	if !ok || secret == "" {
+		b.failLim.allow(ev.IP, now)
+		b.fail(w, ev, http.StatusUnauthorized, "denied", "missing bearer secret")
+		return nil
+	}
+	sum := sha256.Sum256([]byte(secret))
+	st := b.st.Load()
+	var match *secretEntry
+	// Compare against every hash without stopping early so timing does not
+	// reveal which (or whether a) hash matched.
+	for i := range st.secrets {
+		if subtle.ConstantTimeCompare(sum[:], st.secrets[i].sum[:]) == 1 {
+			match = &st.secrets[i]
+		}
+	}
+	if match == nil || match.client.Disabled {
+		b.failLim.allow(ev.IP, now)
+		b.fail(w, ev, http.StatusUnauthorized, "denied", "unknown client secret")
+		return nil
+	}
+	cl := match.client
+	ev.Client = cl.Name
+	if !cl.ipAllowed(ip) {
+		b.fail(w, ev, http.StatusForbidden, "denied", fmt.Sprintf("client %q is not allowed from %s", cl.Name, ip))
+		return nil
+	}
+	b.mu.Lock()
+	touch := now.Sub(b.lastTouch[match.id]) > time.Minute
+	if touch {
+		b.lastTouch[match.id] = now
+	}
+	b.mu.Unlock()
+	if touch {
+		b.store.TouchSecret(match.id, now)
+	}
+	return cl
+}
+
+func (b *Broker) handleWhoami(w http.ResponseWriter, r *http.Request) {
+	ev := &RequestRow{TS: b.now()}
+	cl := b.authenticate(w, r, ev)
+	if cl == nil {
+		return
+	}
+	out := api.WhoAmI{Client: cl.Name, IP: ev.IP, Grants: []api.Grant{}}
+	for _, g := range cl.Grants {
+		out.Grants = append(out.Grants, api.Grant{App: g.App, Repos: g.Repos, Permissions: g.Perms})
+	}
+	writeJSON(w, 200, out)
+}
+
+func (b *Broker) handleInvalidate(w http.ResponseWriter, r *http.Request) {
+	ev := &RequestRow{TS: b.now()}
+	cl := b.authenticate(w, r, ev)
+	if cl == nil {
+		return
+	}
+	var req api.InvalidateRequest
+	if err := decodeBody(w, r, &req); err != nil || req.Token == "" {
+		b.fail(w, ev, 400, "denied", "bad request body")
+		return
+	}
+	t, err := b.store.TokenBySHA(cl.Name, sha256Hex(req.Token))
+	if err != nil {
+		b.fail(w, ev, 500, "error", "database error")
+		return
+	}
+	if t != nil {
+		_ = b.store.MarkRevoked(t.ID, "rejected by GitHub (reported by client)", b.now())
+		ev.Event, ev.Repo, ev.App, ev.Perms = "invalidated", t.Repo, t.App, permString(t.Permissions)
+		ev.Reason = "client reported token rejected"
+		b.audit(ev)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}
+
+func (b *Broker) lockKey(key string) func() {
+	b.mu.Lock()
+	kl := b.keyLocks[key]
+	if kl == nil {
+		kl = &keyLock{}
+		b.keyLocks[key] = kl
+	}
+	kl.refs++
+	b.mu.Unlock()
+	kl.mu.Lock()
+	return func() {
+		kl.mu.Unlock()
+		b.mu.Lock()
+		kl.refs--
+		if kl.refs == 0 {
+			delete(b.keyLocks, key)
+		}
+		b.mu.Unlock()
+	}
+}
+
+func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
+	now := b.now()
+	ev := &RequestRow{TS: now}
+	cl := b.authenticate(w, r, ev)
+	if cl == nil {
+		return
+	}
+	if !b.tokenLim.allow(cl.Name, now) {
+		b.fail(w, ev, http.StatusTooManyRequests, "denied", "rate limit exceeded")
+		return
+	}
+	var req api.TokenRequest
+	if err := decodeBody(w, r, &req); err != nil {
+		b.fail(w, ev, 400, "denied", "bad request body: "+err.Error())
+		return
+	}
+	ev.Repo = req.Repository
+	if !repo.Valid(req.Repository) {
+		b.fail(w, ev, 400, "denied", fmt.Sprintf("invalid repository %q", req.Repository))
+		return
+	}
+	full := strings.ToLower(req.Repository)
+	ev.Repo = full
+	g := cl.grantFor(full)
+	if g == nil {
+		b.fail(w, ev, 403, "denied", fmt.Sprintf("client %q has no grant for %s", cl.Name, full))
+		return
+	}
+	st := b.st.Load()
+	app := st.apps[g.App]
+	if app == nil { // config was reloaded between authentication and here
+		b.fail(w, ev, 503, "error", "configuration changed, retry")
+		return
+	}
+	ev.App = app.Name
+	perms, err := narrow(g.Perms, req.Permissions)
+	if err != nil {
+		ev.Perms = permString(req.Permissions)
+		b.fail(w, ev, 403, "denied", err.Error())
+		return
+	}
+	ev.Perms = permString(perms)
+
+	key := strings.Join([]string{cl.Name, app.Name, full, ev.Perms}, "|")
+	unlock := b.lockKey(key)
+	defer unlock()
+
+	if t, err := b.store.CachedToken(key, now.Add(minCachedLife)); err != nil {
+		b.fail(w, ev, 500, "error", "database error: "+err.Error())
+		return
+	} else if t != nil {
+		b.store.HitToken(t.ID)
+		ev.Event, ev.Status, ev.Cached = "issued", 200, true
+		b.audit(ev)
+		writeJSON(w, 200, api.TokenResponse{
+			Token: t.Token, ExpiresAt: t.ExpiresAt.UTC(), Repository: full, App: app.Name, Permissions: t.Permissions,
+			BotName: t.BotName, BotEmail: t.BotEmail, Cached: true,
+		})
+		return
+	}
+
+	ctx := r.Context()
+	owner, name, _ := strings.Cut(full, "/")
+	instID, err := b.installation(ctx, app, owner, full)
+	if err != nil {
+		code, msg := ghFailure(err, app.Name, full)
+		b.fail(w, ev, code, eventFor(code), msg)
+		return
+	}
+	res, err := b.gh.mint(ctx, app, instID, name, perms)
+	if err != nil {
+		var ge *ghError
+		if errors.As(err, &ge) && ge.Status == 404 {
+			b.dropInstallation(app, owner) // installation was probably removed
+		}
+		code, msg := ghFailure(err, app.Name, full)
+		b.fail(w, ev, code, eventFor(code), msg)
+		return
+	}
+	botName, botEmail := b.identity(ctx, app, res.Token)
+	row := &TokenRow{
+		CacheKey: key, Client: cl.Name, App: app.Name, Repo: full, Permissions: res.Permissions,
+		Token: res.Token, TokenSHA256: sha256Hex(res.Token), BotName: botName, BotEmail: botEmail,
+		IssuedAt: now, ExpiresAt: res.ExpiresAt,
+	}
+	if err := b.store.InsertToken(row, now); err != nil {
+		fmt.Fprintf(os.Stderr, "gh-appauth-broker: caching token: %v\n", err)
+	}
+	ev.Event, ev.Status = "issued", 200
+	b.audit(ev)
+	writeJSON(w, 200, api.TokenResponse{
+		Token: res.Token, ExpiresAt: res.ExpiresAt.UTC(), Repository: full, App: app.Name, Permissions: res.Permissions,
+		BotName: botName, BotEmail: botEmail,
+	})
+}
+
+func eventFor(code int) string {
+	if code == 403 {
+		return "denied"
+	}
+	return "error"
+}
+
+// ghFailure maps GitHub errors to broker responses. 404/422 mean the App is
+// not installed on the owner, or the repo is not among the installation's
+// selected repositories (or the permissions exceed the installation's).
+func ghFailure(err error, app, full string) (int, string) {
+	var ge *ghError
+	if errors.As(err, &ge) {
+		if ge.Status == 404 || ge.Status == 422 {
+			return 403, fmt.Sprintf("app %s is not installed on %s or lacks the requested access (GitHub: %s)", app, full, ge.Message)
+		}
+		return 502, fmt.Sprintf("GitHub error for %s: %s", full, ge.Error())
+	}
+	return 502, fmt.Sprintf("GitHub unreachable: %v", err)
+}
+
+func instKey(app *appState, owner string) string {
+	return fmt.Sprintf("%s#%d|%s", app.Name, app.AppID, owner)
+}
+
+func (b *Broker) installation(ctx context.Context, app *appState, owner, full string) (int64, error) {
+	k := instKey(app, owner)
+	b.mu.Lock()
+	e, ok := b.inst[k]
+	b.mu.Unlock()
+	if ok && b.now().Sub(e.fetched) < instCacheTTL {
+		return e.id, nil
+	}
+	id, err := b.gh.installationID(ctx, app, full)
+	if err != nil {
+		return 0, err
+	}
+	b.mu.Lock()
+	b.inst[k] = instEntry{id: id, fetched: b.now()}
+	b.mu.Unlock()
+	return id, nil
+}
+
+func (b *Broker) dropInstallation(app *appState, owner string) {
+	b.mu.Lock()
+	delete(b.inst, instKey(app, owner))
+	b.mu.Unlock()
+}
+
+// identity returns the bot's git name and noreply email. Failures never fail
+// the token request; lookups are retried at most every identityRetry.
+func (b *Broker) identity(ctx context.Context, app *appState, token string) (string, string) {
+	k := fmt.Sprintf("%s#%d", app.Name, app.AppID)
+	b.mu.Lock()
+	id := b.ids[k]
+	if id == nil {
+		id = &identity{}
+		b.ids[k] = id
+	}
+	if id.done || (!id.lastTry.IsZero() && b.now().Sub(id.lastTry) < identityRetry) {
+		slug, botID := id.slug, id.botID
+		b.mu.Unlock()
+		return botIdentity(slug, botID)
+	}
+	id.lastTry = b.now()
+	slug := id.slug
+	b.mu.Unlock()
+
+	var botID int64
+	var err error
+	if slug == "" {
+		slug, err = b.gh.appSlug(ctx, app)
+	}
+	if err == nil {
+		botID, err = b.gh.botUserID(ctx, slug, token)
+	}
+	b.mu.Lock()
+	id.slug = slug
+	if err == nil {
+		id.botID, id.done = botID, true
+	} else {
+		fmt.Fprintf(os.Stderr, "gh-appauth-broker: bot identity for app %s: %v\n", app.Name, err)
+	}
+	b.mu.Unlock()
+	return botIdentity(slug, botID)
+}
+
+func botIdentity(slug string, id int64) (string, string) {
+	if slug == "" {
+		return "", ""
+	}
+	name := slug + "[bot]"
+	if id == 0 {
+		return name, ""
+	}
+	return name, fmt.Sprintf("%d+%s@users.noreply.github.com", id, name)
+}

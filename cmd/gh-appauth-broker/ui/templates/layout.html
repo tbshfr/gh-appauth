@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · gh-appauth</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<script src="/ui/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/ui/"><span class="logo">⚿</span> gh-appauth broker</a>
+  {{if .LoggedIn}}
+  <nav>
+    <a href="/ui/" {{if eq .Nav "dash"}}class="on"{{end}}>Dashboard</a>
+    <a href="/ui/clients" {{if eq .Nav "clients"}}class="on"{{end}}>Clients</a>
+    <a href="/ui/apps" {{if eq .Nav "apps"}}class="on"{{end}}>Apps</a>
+    <a href="/ui/history" {{if eq .Nav "history"}}class="on"{{end}}>History</a>
+    <a href="/ui/settings" {{if eq .Nav "settings"}}class="on"{{end}}>Settings</a>
+  </nav>
+  <form method="post" action="/ui/logout" class="logout">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button class="link">Sign out</button>
+  </form>
+  {{end}}
+</header>
+<main>
+  {{if .Msg}}<div class="flash ok">{{.Msg}}</div>{{end}}
+  {{if .Err}}<div class="flash err">{{.Err}}</div>{{end}}
+  {{template "content" .}}
+</main>
+</body>
+</html>
+{{define "events"}}
+<div class="scroll">
+<table class="events">
+  <thead><tr><th>Time</th><th>Event</th><th>Client</th><th>IP</th><th>Repo</th><th>App</th><th>Permissions</th><th>Detail</th></tr></thead>
+  <tbody>
+  {{range .}}
+  <tr>
+    <td class="nowrap" title="{{ts .TS}}">{{ago .TS}}</td>
+    <td><span class="pill {{.Event}}">{{.Event}}{{if .Cached}} · cached{{end}}</span>{{if .Status}} <span class="muted">{{.Status}}</span>{{end}}</td>
+    <td class="nowrap">{{if .Client}}<a href="/ui/clients/{{.Client}}">{{.Client}}</a>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td class="mono">{{.IP}}</td>
+    <td class="mono nowrap">{{.Repo}}</td>
+    <td class="nowrap">{{.App}}</td>
+    <td class="mono small">{{spaced .Perms}}</td>
+    <td class="small">{{.Reason}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="8" class="empty">No requests yet.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+{{define "tokens"}}
+<div class="scroll">
+<table>
+  <thead><tr><th>Client</th><th>Repo</th><th>App</th><th>Permissions</th><th>Token</th><th>Issued</th><th>Expires</th><th>Reuses</th><th></th></tr></thead>
+  <tbody>
+  {{range .Tokens}}
+  <tr>
+    <td class="nowrap"><a href="/ui/clients/{{.Client}}">{{.Client}}</a></td>
+    <td class="mono nowrap">{{.Repo}}</td>
+    <td class="nowrap">{{.App}}</td>
+    <td class="mono small">{{spaced (perms .Permissions)}}</td>
+    <td class="mono muted">{{hint .Token}}</td>
+    <td class="nowrap" title="{{ts .IssuedAt}}">{{ago .IssuedAt}}</td>
+    <td class="nowrap" title="{{ts .ExpiresAt}}">{{until .ExpiresAt}}</td>
+    <td>{{.Hits}}</td>
+    <td>
+      <form method="post" action="/ui/tokens/{{.ID}}/revoke" data-confirm="Revoke this token at GitHub? Agents using it will fetch a new one.">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="back" value="{{$.Back}}">
+        <button class="small danger">Revoke</button>
+      </form>
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="9" class="empty">No active tokens.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}

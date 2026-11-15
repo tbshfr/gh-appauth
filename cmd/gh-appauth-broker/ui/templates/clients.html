@@ -1,0 +1,39 @@
+{{define "content"}}
+<section class="card">
+  <h1>Clients</h1>
+  <p class="muted small">Each client (a machine or an agent) has its own secret(s) and grants. Deleting or disabling a client revokes its tokens.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Name</th><th>Status</th><th>Allowed from</th><th>Secrets</th><th>Grants</th><th>Last used</th></tr></thead>
+    <tbody>
+    {{range .Data.Clients}}
+    <tr>
+      <td><a href="/ui/clients/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Note}}<div class="muted small">{{.Note}}</div>{{end}}</td>
+      <td>{{if .Disabled}}<span class="pill denied">disabled</span>{{else}}<span class="pill issued">active</span>{{end}}</td>
+      <td class="mono small">{{if .AllowedCIDRs}}{{join .AllowedCIDRs ", "}}{{else}}<span class="muted">anywhere</span>{{end}}</td>
+      <td>{{len .Secrets}}</td>
+      <td>{{len .Grants}}</td>
+      <td title="{{ts .LastUsed}}">{{ago .LastUsed}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="6" class="empty">No clients yet.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>New client</h2>
+  <form method="post" action="/ui/clients" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <div class="row">
+      <label>Name <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" placeholder="laptop-claude"></label>
+      <label>Note <input name="note" placeholder="optional"></label>
+    </div>
+    <label>Allowed source IPs / CIDRs <span class="muted small">(optional, comma or newline separated; empty = anywhere)</span>
+      <input name="allowed_cidrs" placeholder="192.168.1.20, 10.0.0.0/24" class="mono"></label>
+    <div><button class="primary">Create client and secret</button></div>
+  </form>
+</section>
+{{end}}

@@ -1,0 +1,262 @@
+package main
+
+import (
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+type uiClient struct {
+	t    *testing.T
+	srv  *httptest.Server
+	c    *http.Client
+	csrf string
+}
+
+var csrfRE = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
+
+func (u *uiClient) get(path string) (int, string) {
+	u.t.Helper()
+	resp, err := u.c.Get(u.srv.URL + path)
+	if err != nil {
+		u.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if m := csrfRE.FindStringSubmatch(string(b)); m != nil {
+		u.csrf = m[1]
+	}
+	return resp.StatusCode, string(b)
+}
+
+func (u *uiClient) post(path string, form url.Values) (int, string, string) {
+	u.t.Helper()
+	if form == nil {
+		form = url.Values{}
+	}
+	if _, ok := form["csrf"]; !ok {
+		form.Set("csrf", u.csrf)
+	}
+	resp, err := u.c.PostForm(u.srv.URL+path, form)
+	if err != nil {
+		u.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if m := csrfRE.FindStringSubmatch(string(b)); m != nil {
+		u.csrf = m[1]
+	}
+	return resp.StatusCode, resp.Request.URL.String(), string(b)
+}
+
+func newUIClient(t *testing.T, e *env) *uiClient {
+	h, err := hashPassword("correct horse battery")
+	must(t, err)
+	must(t, e.store.SetSetting("admin_password", h))
+	srv := httptest.NewServer(e.b.UIHandler())
+	t.Cleanup(srv.Close)
+	jar, _ := cookiejar.New(nil)
+	return &uiClient{t: t, srv: srv, c: &http.Client{Jar: jar}}
+}
+
+func TestUILoginAndCSRF(t *testing.T) {
+	e := newEnv(t, nil)
+	u := newUIClient(t, e)
+
+	if _, body := u.get("/ui/"); !strings.Contains(body, `name="password"`) {
+		t.Fatal("unauthenticated dashboard should redirect to login")
+	}
+	if _, final, _ := u.post("/ui/login", url.Values{"password": {"wrong"}}); !strings.Contains(final, "err=") {
+		t.Fatalf("wrong password not rejected: %s", final)
+	}
+	_, final, body := u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	if !strings.HasSuffix(final, "/ui/") || !strings.Contains(body, "Active tokens") {
+		t.Fatalf("login failed: %s", final)
+	}
+	// POST without the CSRF token is refused.
+	code, _, _ := u.post("/ui/clients", url.Values{"csrf": {"forged"}, "name": {"mallory"}})
+	if code != http.StatusForbidden {
+		t.Fatalf("missing CSRF: %d", code)
+	}
+	// Logout invalidates the session.
+	u.post("/ui/logout", nil)
+	if _, body := u.get("/ui/clients"); !strings.Contains(body, `name="password"`) {
+		t.Fatal("session survived logout")
+	}
+}
+
+func TestUIManageClient(t *testing.T) {
+	e := newEnv(t, nil)
+	u := newUIClient(t, e)
+	u.get("/ui/login")
+	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	u.get("/ui/clients")
+
+	_, final, body := u.post("/ui/clients", url.Values{"name": {"carol"}, "allowed_cidrs": {"10.1.0.0/16"}})
+	if !strings.Contains(final, "/ui/clients/carol") {
+		t.Fatalf("redirected to %s", final)
+	}
+	m := regexp.MustCompile(`<code id="secret">(gaa_[A-Za-z0-9_-]+)</code>`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("new secret not shown")
+	}
+	secret := m[1]
+	// The secret is shown only once.
+	if _, again := u.get("/ui/clients/carol"); strings.Contains(again, secret) {
+		t.Fatal("secret shown twice")
+	}
+	// No grant yet → 403; add one through the UI → 200.
+	if c := e.token(secret, "acme/web", nil).code; c != 403 {
+		t.Fatalf("before grant: %d", c)
+	}
+	_, final, _ = u.post("/ui/clients/carol/grants", url.Values{
+		"app": {"frontend-bot"}, "repos": {"acme/web\nacme/site"}, "perm_contents": {"read"}, "perm_other": {"metadata=read"},
+	})
+	if strings.Contains(final, "err=") {
+		t.Fatalf("add grant: %s", final)
+	}
+	r := e.token(secret, "acme/web", nil)
+	if r.code != 200 || r.tok.Permissions["contents"] != "read" {
+		t.Fatalf("after grant: %d %s", r.code, r.body)
+	}
+	// Bad grant input is rejected.
+	_, final, _ = u.post("/ui/clients/carol/grants", url.Values{"app": {"frontend-bot"}, "repos": {"acme/x/y"}})
+	if !strings.Contains(final, "err=") {
+		t.Fatal("bad pattern accepted")
+	}
+	// Active token visible on the dashboard, but the token value isn't.
+	_, dash := u.get("/ui/")
+	if !strings.Contains(dash, "acme/web") || strings.Contains(dash, r.tok.Token) {
+		t.Fatal("dashboard should list the token without its value")
+	}
+	// History page lists the request.
+	if _, hist := u.get("/ui/history?client=carol"); !strings.Contains(hist, "acme/web") {
+		t.Fatal("history missing request")
+	}
+	// Revoke through the UI.
+	toks, _ := e.store.ActiveTokens(e.b.now())
+	var id int64
+	for _, tk := range toks {
+		if tk.Client == "carol" {
+			id = tk.ID
+		}
+	}
+	u.get("/ui/")
+	u.post("/ui/tokens/"+itoa(id)+"/revoke", url.Values{"back": {"/ui/"}})
+	if e.gh.TokenValid(r.tok.Token) {
+		t.Fatal("UI revoke didn't revoke at GitHub")
+	}
+	// Disable the client.
+	u.get("/ui/clients/carol")
+	u.post("/ui/clients/carol", url.Values{"allowed_cidrs": {"10.1.0.0/16"}, "disabled": {"on"}})
+	if c := e.token(secret, "acme/web", nil).code; c != 401 {
+		t.Fatalf("disabled via UI: %d", c)
+	}
+	// Delete it.
+	u.post("/ui/clients/carol/delete", nil)
+	if _, body := u.get("/ui/clients"); strings.Contains(body, ">carol<") {
+		t.Fatal("client not deleted")
+	}
+}
+
+func TestUIApps(t *testing.T) {
+	e := newEnv(t, nil)
+	u := newUIClient(t, e)
+	u.get("/ui/login")
+	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	u.get("/ui/apps")
+	_, final, _ := u.post("/ui/apps", url.Values{"name": {"third"}, "app_id": {"999"}, "private_key": {"not a key"}})
+	if !strings.Contains(final, "err=") {
+		t.Fatal("bad key accepted")
+	}
+	_, final, _ = u.post("/ui/apps", url.Values{"name": {"third"}, "app_id": {"999"}, "private_key": {key1PEM}})
+	if strings.Contains(final, "err=") {
+		t.Fatalf("save app: %s", final)
+	}
+	if e.b.st.Load().apps["third"] == nil {
+		t.Fatal("app not loaded after save")
+	}
+	_, final, _ = u.post("/ui/apps/backend-bot/test", nil)
+	if !strings.Contains(final, "works") {
+		t.Fatalf("test app: %s", final)
+	}
+	_, final, _ = u.post("/ui/apps/backend-bot/delete", nil)
+	if !strings.Contains(final, "err=") {
+		t.Fatal("deleted an app that grants use")
+	}
+	u.post("/ui/apps/third/delete", nil)
+	if e.b.st.Load().apps["third"] != nil {
+		t.Fatal("app not deleted")
+	}
+}
+
+func TestUIPagesRender(t *testing.T) {
+	e := newEnv(t, nil)
+	e.token(secretA, "acme/api-core", nil)
+	e.token("bad", "acme/api-core", nil)
+	u := newUIClient(t, e)
+	u.get("/ui/login")
+	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	for _, p := range []string{"/ui/", "/ui/clients", "/ui/clients/alice", "/ui/apps", "/ui/history", "/ui/history?event=denied", "/ui/settings", "/ui/static/style.css", "/ui/static/app.js"} {
+		code, body := u.get(p)
+		if code != 200 || strings.Contains(body, "template error") {
+			t.Errorf("%s: %d %.200s", p, code, body)
+		}
+	}
+	resp, _ := u.c.Get(u.srv.URL + "/ui/")
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+		t.Errorf("CSP = %q", csp)
+	}
+	resp.Body.Close()
+}
+
+func TestUIPasswordChange(t *testing.T) {
+	e := newEnv(t, nil)
+	u := newUIClient(t, e)
+	u.get("/ui/login")
+	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	u.get("/ui/settings")
+	_, final, _ := u.post("/ui/settings/password", url.Values{"current": {"correct horse battery"}, "new": {"short"}, "confirm": {"short"}})
+	if !strings.Contains(final, "err=") {
+		t.Fatal("short password accepted")
+	}
+	_, final, _ = u.post("/ui/settings/password", url.Values{"current": {"correct horse battery"}, "new": {"a much longer one"}, "confirm": {"a much longer one"}})
+	if !strings.Contains(final, "/ui/login") {
+		t.Fatalf("password change: %s", final)
+	}
+	stored, _ := e.store.GetSetting("admin_password")
+	if !checkPassword(stored, "a much longer one") || checkPassword(stored, "correct horse battery") {
+		t.Fatal("password not changed")
+	}
+}
+
+func TestUINotOnAPIWhenSeparate(t *testing.T) {
+	e := newEnv(t, nil)
+	h := e.b.APIHandler(false)
+	r := httptest.NewRequest("GET", "/ui/login", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 404 {
+		t.Fatalf("UI reachable on API listener: %d", w.Code)
+	}
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
