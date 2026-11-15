@@ -158,6 +158,18 @@ export PATH="$WORK/shim:$WORK/realgh:$PATH"
 { grep -q "TOKEN=$WEBTOK " <<<"$(gh pr list --repo=acme/web)"; } || fail "shim: --repo= flag"; pass "shim: --repo= flag"
 { grep -q "TOKEN= GITHUB_TOKEN= ARGS=--version" <<<"$(GITHUB_TOKEN=leak gh --version)"; } || fail "shim: pass-through strips tokens"; pass "shim: pass-through strips tokens"
 { (cd "$WORK" && grep -q "TOKEN= " <<<"$(gh pr list)"); } || fail "shim: no repo → no token"; pass "shim: no repo → no token"
+{ (cd "$WORK" && grep -q "TOKEN=$WEBTOK " <<<"$(gh repo clone acme/web)"); } || fail "shim: repo clone outside a repo"; pass "shim: repo clone outside a repo"
+{ grep -q "TOKEN=$WEBTOK " <<<"$(gh repo clone -u up acme/web)"; } || fail "shim: repo clone inside another repo"; pass "shim: repo clone inside another repo"
+{ ! gh repo clone web >/dev/null 2>&1; } || fail "shim: bare repo name refused"; pass "shim: bare repo name refused"
+{ grep -q "TOKEN=$WEBTOK " <<<"$(gh pr view https://github.com/acme/web/pull/1 -R acme/api-core)"; } || fail "shim: PR URL beats -R"; pass "shim: PR URL beats -R"
+{ grep -q "TOKEN=$TOKEN " <<<"$(gh pr comment 1 --body https://github.com/acme/web/pull/1)"; } || fail "shim: URL in --body ignored"; pass "shim: URL in --body ignored"
+{ grep -q "TOKEN=$WEBTOK " <<<"$(GH_REPO=acme/web gh pr list)"; } || fail "shim: GH_REPO"; pass "shim: GH_REPO"
+git remote add upstream https://github.com/acme/web
+{ grep -q "TOKEN=$WEBTOK " <<<"$(gh pr list)"; } || fail "shim: upstream remote beats origin"; pass "shim: upstream remote beats origin"
+git config remote.origin.gh-resolved base
+{ grep -q "TOKEN=$TOKEN " <<<"$(gh pr list)"; } || fail "shim: gh repo set-default"; pass "shim: gh repo set-default"
+git config --unset remote.origin.gh-resolved
+git remote remove upstream
 { grep -q "TOKEN=$TOKEN GITHUB_TOKEN=$TOKEN" <<<"$(GH_TOKEN=other "$EXT" exec -- "$WORK/realgh/gh")"; } || fail "exec sets GH_TOKEN and GITHUB_TOKEN"; pass "exec sets GH_TOKEN and GITHUB_TOKEN"
 
 echo "== erase / invalidate"

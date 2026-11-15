@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tbshfr/gh-appauth/internal/repo"
@@ -32,6 +33,61 @@ func currentRepo(cfg *Config) (string, error) {
 		return "", errors.New("no origin remote here (not in a git repo?); pass OWNER/REPO")
 	}
 	return repo.ParseHost(u, cfg.GitHubHost())
+}
+
+// ghBaseRepo returns the repo gh itself works on in the current folder, which
+// isn't always origin: in a fork cloned by `gh repo clone`, gh targets the
+// parent in the upstream remote.
+func ghBaseRepo(cfg *Config) (string, error) {
+	remotes, err := gitOut("remote", "-v")
+	if err != nil {
+		return "", errors.New("no git remotes here (not in a git repo?); pass OWNER/REPO")
+	}
+	resolved, _ := gitOut("config", "--get-regexp", `^remote\..*\.gh-resolved$`)
+	return pickBaseRepo(remotes, resolved, cfg.GitHubHost())
+}
+
+// pickBaseRepo mirrors gh's choice when it can't prompt (checked against gh
+// 2.103). Among the remotes on host, sorted upstream, github, origin, then the
+// rest in git's order, the first one marked by `gh repo set-default`
+// (remote.NAME.gh-resolved) wins, else the first one. remotesV is the output of
+// `git remote -v`, resolvedCfg that of `git config --get-regexp`.
+func pickBaseRepo(remotesV, resolvedCfg, host string) (string, error) {
+	type remote struct{ name, repo string }
+	var remotes []remote
+	for line := range strings.Lines(remotesV) {
+		f := strings.Fields(line)
+		// Partial clones add a fourth field, such as "[blob:none]".
+		if len(f) < 3 || f[2] != "(fetch)" {
+			continue
+		}
+		if r, err := repo.ParseHost(f[1], host); err == nil {
+			remotes = append(remotes, remote{f[0], r})
+		}
+	}
+	if len(remotes) == 0 {
+		return "", fmt.Errorf("no %s remote here; pass OWNER/REPO", host)
+	}
+	score := map[string]int{"upstream": 3, "github": 2, "origin": 1}
+	slices.SortStableFunc(remotes, func(a, b remote) int { return score[b.name] - score[a.name] })
+
+	resolved := map[string]string{}
+	for line := range strings.Lines(resolvedCfg) {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok {
+			resolved[strings.TrimSuffix(strings.TrimPrefix(k, "remote."), ".gh-resolved")] = v
+		}
+	}
+	for _, r := range remotes {
+		switch v := resolved[r.name]; v {
+		case "":
+		case "base":
+			return r.repo, nil
+		default:
+			return repo.ParseHost(v, host)
+		}
+	}
+	return remotes[0].repo, nil
 }
 
 // selfPath is the absolute path of this binary. git and the gh shim call it

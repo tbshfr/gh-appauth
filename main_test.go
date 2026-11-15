@@ -482,6 +482,100 @@ func TestRepoFlag(t *testing.T) {
 	}
 }
 
+func TestPositionalArg(t *testing.T) {
+	cases := map[string]string{
+		"repo clone acme/web":                                            "acme/web",
+		"repo clone https://github.com/acme/web":                         "https://github.com/acme/web",
+		"repo clone acme/web dir -- --depth 1":                           "acme/web",
+		"repo clone -u up acme/web":                                      "acme/web",
+		"repo clone --upstream-remote-name up acme/web":                  "acme/web",
+		"repo clone --no-upstream acme/web":                              "acme/web",
+		"repo clone -- acme/web":                                         "",
+		"repo view acme/web --json name":                                 "acme/web",
+		"repo view --json name acme/web":                                 "acme/web",
+		"repo view -b feat/x acme/web":                                   "acme/web",
+		"repo view -w":                                                   "",
+		"repo list acme":                                                 "",
+		"repo fork --org o acme/web -- --depth 1":                        "acme/web",
+		"repo fork --clone":                                              "",
+		"repo set-default acme/web":                                      "acme/web",
+		"repo set-default --view":                                        "",
+		"co https://github.com/a/b/pull/1":                               "https://github.com/a/b/pull/1",
+		"co":                                                             "",
+		"pr merge --match-head-commit abc https://github.com/a/b/pull/1": "https://github.com/a/b/pull/1",
+		"pr view 12":                                                     "12",
+		"pr view --web https://github.com/a/b/pull/1":                    "https://github.com/a/b/pull/1",
+		"pr comment 3 -b https://github.com/a/b/pull/1":                  "3",
+		"pr comment -b https://github.com/a/b/pull/1":                    "",
+		"issue view -R x/y --json title 7":                               "7",
+		"pr list https://github.com/a/b/pull/1":                          "",
+	}
+	for in, want := range cases {
+		_, got, _ := positionalArg(strings.Fields(in))
+		if got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestShimRepo(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg := &Config{}
+	cases := []struct {
+		args, ghRepo, want string
+	}{
+		{"pr view https://github.com/url/r/pull/1/files -R flag/r", "env/r", "url/r"},
+		{"issue view https://github.com/url/r/issues/2", "", "url/r"},
+		{"pr view 1 -R flag/r", "env/r", "flag/r"},
+		{"pr list", "env/r", "env/r"},
+		{"pr list", "github.com/env/r", "env/r"},
+		{"repo clone acme/web", "env/r", "acme/web"},
+		{"co https://github.com/url/r/pull/1", "env/r", "url/r"},
+		{"pr list", "", ""},
+	}
+	for _, c := range cases {
+		t.Setenv("GH_REPO", c.ghRepo)
+		t.Setenv("GH_APPAUTH_REPO", "")
+		got, err := shimRepo(cfg, strings.Fields(c.args))
+		if err != nil || got != c.want {
+			t.Errorf("%q GH_REPO=%q: got %q, %v want %q", c.args, c.ghRepo, got, err, c.want)
+		}
+	}
+	if _, err := shimRepo(cfg, []string{"pr", "view", "https://gitlab.com/a/b/pull/1"}); err == nil {
+		t.Error("URL on another host should be refused")
+	}
+}
+
+func TestPickBaseRepo(t *testing.T) {
+	remote := func(name, url string) string {
+		return name + "\t" + url + " (fetch)\n" + name + "\t" + url + " (push)\n"
+	}
+	origin := remote("origin", "https://github.com/me/fork.git")
+	upstream := remote("acme", "git@github.com:acme/other.git") + remote("upstream", "https://github.com/acme/parent")
+	cases := []struct {
+		name, remotes, resolved, want string
+	}{
+		{"origin only", origin, "", "me/fork"},
+		{"partial clone", "origin\thttps://github.com/me/fork (fetch) [blob:none]\norigin\thttps://github.com/me/fork (push)\n", "", "me/fork"},
+		{"upstream beats origin", upstream + origin, "", "acme/parent"},
+		{"github beats origin", remote("github", "https://github.com/gh/r") + origin, "", "gh/r"},
+		{"origin beats others", remote("aaa", "https://github.com/a/a") + origin, "", "me/fork"},
+		{"others in git order", remote("aaa", "https://github.com/a/a") + remote("bbb", "https://github.com/b/b"), "", "a/a"},
+		{"set-default base", upstream + origin, "remote.origin.gh-resolved base\n", "me/fork"},
+		{"set-default name", upstream + origin, "remote.origin.gh-resolved other/thing\n", "other/thing"},
+		{"other hosts skipped", remote("upstream", "https://gitlab.com/x/y") + origin, "remote.upstream.gh-resolved base\n", "me/fork"},
+	}
+	for _, c := range cases {
+		got, err := pickBaseRepo(c.remotes, c.resolved, "github.com")
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q, %v want %q", c.name, got, err, c.want)
+		}
+	}
+	if _, err := pickBaseRepo(remote("origin", "https://gitlab.com/x/y"), "", "github.com"); err == nil {
+		t.Error("no GitHub remote should be an error")
+	}
+}
+
 func TestPassthrough(t *testing.T) {
 	for _, a := range [][]string{nil, {"--version"}, {"version"}, {"help"}, {"auth", "status"}, {"extension", "list"}, {"ext"}, {"config", "get"}, {"alias"}, {"completion"}, {"appauth", "status"}} {
 		if needsToken(a) {

@@ -43,7 +43,8 @@ Internal:
 
 Environment: GH_APPAUTH_BROKER, GH_APPAUTH_SECRET, GH_APPAUTH_CA_FILE,
 GH_APPAUTH_FINGERPRINT and GH_APPAUTH_INSECURE_HTTP=1 override the config file;
-GH_APPAUTH_REPO sets the repo for the gh shim when it can't be inferred.
+GH_APPAUTH_REPO sets the repo for the gh shim and exec when the command doesn't
+name one and GH_REPO isn't set.
 `
 
 // exitCode is returned by commands that run a child process.

@@ -1,14 +1,17 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/tbshfr/gh-appauth/internal/repo"
@@ -122,6 +125,93 @@ func repoFlag(args []string) (string, bool) {
 	return "", false
 }
 
+// positionalCmds lists the gh commands whose first positional argument can name
+// the repository, each with its flags that take a value, so that a value such
+// as a --body containing a PR link isn't mistaken for that argument. For
+// `repo` commands the argument is the repository; for `pr` and `issue` it only
+// names one when it's a URL. The flag lists come from gh 2.103 --help.
+var positionalCmds = map[string]string{
+	"repo clone":       "-u --upstream-remote-name",
+	"repo fork":        "--fork-name --org --remote-name",
+	"repo set-default": "",
+	"repo view":        "-b --branch -q --jq --json -t --template",
+
+	"pr checkout":      "-b --branch --worktree",
+	"pr checks":        "-i --interval -q --jq --json -t --template",
+	"pr close":         "-c --comment",
+	"pr comment":       "--attach -b --body -F --body-file",
+	"pr diff":          "--color -e --exclude",
+	"pr edit":          "--add-assignee --add-label --add-project --add-reviewer --attach -B --base -b --body -F --body-file -m --milestone --remove-assignee --remove-label --remove-project --remove-reviewer -t --title",
+	"pr lock":          "-r --reason",
+	"pr merge":         "-A --author-email -b --body -F --body-file --match-head-commit -t --subject",
+	"pr ready":         "",
+	"pr reopen":        "-c --comment",
+	"pr revert":        "-b --body -F --body-file -t --title",
+	"pr review":        "-b --body -F --body-file",
+	"pr unlock":        "",
+	"pr update-branch": "",
+	"pr view":          "-q --jq --json -t --template",
+
+	"issue close":    "-c --comment --duplicate-of -r --reason",
+	"issue comment":  "--attach -b --body -F --body-file",
+	"issue delete":   "",
+	"issue develop":  "-b --base --branch-repo -n --name --worktree",
+	"issue edit":     "--add-assignee --add-blocked-by --add-blocking --add-label --add-project --add-sub-issue --attach -b --body -F --body-file -m --milestone --parent --remove-assignee --remove-blocked-by --remove-blocking --remove-label --remove-project --remove-sub-issue -t --title --type",
+	"issue lock":     "-r --reason",
+	"issue pin":      "",
+	"issue reopen":   "-c --comment",
+	"issue transfer": "",
+	"issue unlock":   "",
+	"issue unpin":    "",
+	"issue view":     "-q --jq --json -t --template",
+}
+
+// positionalArg returns the command ("pr view") and its first positional
+// argument, if the command is in positionalCmds and has one.
+func positionalArg(args []string) (cmd, arg string, ok bool) {
+	if len(args) > 0 && args[0] == "co" {
+		// gh ships `co` as a default alias for `pr checkout`.
+		args = append([]string{"pr", "checkout"}, args[1:]...)
+	}
+	if len(args) < 2 {
+		return "", "", false
+	}
+	cmd = args[0] + " " + args[1]
+	spec, known := positionalCmds[cmd]
+	if !known {
+		return "", "", false
+	}
+	valueFlags := append(strings.Fields(spec), "-R", "--repo")
+	for i := 2; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			// For repo clone and fork, everything after this goes to git.
+			return "", "", false
+		case slices.Contains(valueFlags, a):
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			return cmd, a, true
+		}
+	}
+	return "", "", false
+}
+
+// repoFromURL returns owner/repo from a GitHub web URL such as
+// https://github.com/acme/web/pull/1/files.
+func repoFromURL(s, host string) (string, error) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL %q: %v", s, err)
+	}
+	seg := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(seg) < 2 {
+		return "", fmt.Errorf("can't find OWNER/REPO in %q", s)
+	}
+	return repo.ParseHost((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: seg[0] + "/" + seg[1]}).String(), host)
+}
+
 func needsToken(args []string) bool {
 	return len(args) > 0 && !passthrough[args[0]]
 }
@@ -155,15 +245,33 @@ func runChild(path string, args []string, env []string, stdin io.Reader, stdout,
 	return err
 }
 
-// shimRepo works out which repo a gh command targets.
+// shimRepo works out which repo a gh command targets, in the order gh itself
+// uses (checked against gh 2.103): a repo or PR/issue URL argument, -R,
+// GH_REPO, then the current folder's remotes.
 func shimRepo(cfg *Config, args []string) (string, error) {
+	host := cfg.GitHubHost()
+	if cmd, v, ok := positionalArg(args); ok {
+		if strings.HasPrefix(cmd, "repo ") {
+			r, err := repo.ParseHost(v, host)
+			if err != nil {
+				return "", fmt.Errorf("%v; gh resolves a bare name against the logged-in user, and an App token has none", err)
+			}
+			return r, nil
+		}
+		if strings.Contains(v, "://") {
+			return repoFromURL(v, host)
+		}
+	}
 	if v, ok := repoFlag(args); ok {
-		return repo.ParseHost(v, cfg.GitHubHost())
+		return repo.ParseHost(v, host)
+	}
+	if v := os.Getenv("GH_REPO"); v != "" {
+		return repo.ParseHost(v, host)
 	}
 	if v := os.Getenv("GH_APPAUTH_REPO"); v != "" {
-		return repo.ParseHost(v, cfg.GitHubHost())
+		return repo.ParseHost(v, host)
 	}
-	r, err := currentRepo(cfg)
+	r, err := ghBaseRepo(cfg)
 	if err != nil {
 		return "", nil // no repo: run without a token
 	}
@@ -208,7 +316,7 @@ func cmdGHShim(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 func cmdExec(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	repoArg := fs.String("repo", "", "OWNER/REPO (default: origin of the current folder)")
+	repoArg := fs.String("repo", "", "OWNER/REPO (default: the repo gh would use in the current folder)")
 	if err := fs.Parse(args); err != nil {
 		return exitCode(2)
 	}
@@ -223,8 +331,10 @@ func cmdExec(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	var r string
 	if *repoArg != "" {
 		r, err = repo.ParseHost(*repoArg, cfg.GitHubHost())
+	} else if v := cmp.Or(os.Getenv("GH_REPO"), os.Getenv("GH_APPAUTH_REPO")); v != "" {
+		r, err = repo.ParseHost(v, cfg.GitHubHost())
 	} else {
-		r, err = currentRepo(cfg)
+		r, err = ghBaseRepo(cfg)
 	}
 	if err != nil {
 		return err
