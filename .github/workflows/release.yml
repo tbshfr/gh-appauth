@@ -1,38 +1,58 @@
-name: release
+name: Publish release binaries
+
 on:
   push:
-    tags: ["v*"]
-
-permissions:
-  contents: write
+    tags:
+      - "v*.*.*"
 
 jobs:
-  extension:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cli/gh-extension-precompile@v2
-        with:
-          go_version_file: go.mod
+  release:
+    name: Build and publish binaries
+    runs-on: ubuntu-24.04-arm
 
-  broker:
-    needs: extension
-    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Checkout repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: build broker
+
+      - name: Verify
         run: |
-          mkdir -p dist
-          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            os=${t%/*}; arch=${t#*/}
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" \
-              -o "dist/gh-appauth-broker_${GITHUB_REF_NAME}_${os}-${arch}" ./cmd/gh-appauth-broker
-          done
-          (cd dist && sha256sum gh-appauth-broker_* > gh-appauth-broker_${GITHUB_REF_NAME}_checksums.txt)
-      - name: upload to release
+          go vet ./...
+          go test ./...
+
+      - name: Extract tag name
+        id: tag
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Build release artifacts
+        run: scripts/release.sh "${{ steps.tag.outputs.version }}"
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          config: cliff.toml
+          args: --current
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ steps.tag.outputs.version }}
+          generate_release_notes: false
+          body_path: ${{ github.workspace }}/RELEASE_NOTES.md
+          working_directory: dist
+          files: "*"
