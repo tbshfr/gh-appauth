@@ -303,6 +303,22 @@ func TestUIPagesRender(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestUIVersion(t *testing.T) {
+	for _, tc := range []struct{ version, want string }{
+		{"v1.2.3", `<a href="https://github.com/tbshfr/gh-appauth/releases/tag/v1.2.3"`},
+		{"v1.2.3-4-gabcdef0", `<a href="https://github.com/tbshfr/gh-appauth/releases" target="_blank" rel="noopener" title="gh-appauth releases on GitHub">v1.2.3-4-gabcdef0</a>`},
+	} {
+		e := newEnv(t, func(o *Options) { o.Info.Version = tc.version })
+		u := newUIClient(t, e)
+		u.get("/ui/login")
+		u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+		_, body := u.get("/ui/settings")
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("%s: settings page lacks %s", tc.version, tc.want)
+		}
+	}
+}
+
 func TestUIPasswordChange(t *testing.T) {
 	e := newEnv(t, nil)
 	u := newUIClient(t, e)

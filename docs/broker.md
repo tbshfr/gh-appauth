@@ -21,6 +21,7 @@ gh-appauth-broker set-password               admin UI password (stdin; ≥10 cha
 gh-appauth-broker check                      validate stored config and keys
 gh-appauth-broker fingerprint                self-signed certificate SHA-256
 (all of these also take -data-dir DIR or -db FILE)
+gh-appauth-broker version                    print the version (also shown in the admin UI)
 ```
 
 ## TLS modes

@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 DIST=dist
+LDFLAGS="-s -w -X main.version=${VERSION}"
 
 rm -rf "${DIST}"
 mkdir -p "${DIST}"
@@ -15,7 +16,7 @@ build() {
     local goos="$1" goarch="$2" pkg="$3" name="$4"
     echo "building ${name}"
     CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
-        go build -trimpath -ldflags="-s -w" -o "${DIST}/${name}" "${pkg}"
+        go build -trimpath -ldflags="${LDFLAGS}" -o "${DIST}/${name}" "${pkg}"
 }
 
 # `gh extension install` picks the first asset whose name ends in

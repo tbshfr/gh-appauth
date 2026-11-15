@@ -14,6 +14,7 @@
     </div>
   </header>
   <dl class="kv">
+    <dt>Version</dt><dd class="mono version"><a href="{{.Info.ReleaseURL}}" target="_blank" rel="noopener" title="gh-appauth releases on GitHub">{{.Info.Version}}</a></dd>
     <dt>API listen</dt><dd class="mono">{{.Info.Listen}}</dd>
     <dt>Admin UI</dt><dd class="mono">{{if .Info.UIListen}}{{.Info.UIListen}}{{else}}same as API ({{.Info.Listen}}/ui/){{end}}</dd>
     <dt>TLS</dt><dd>{{if eq .Info.TLSMode "off"}}<span class="pill error">off</span> Client secrets cross the network unencrypted.{{else if eq .Info.TLSMode "self"}}<span class="pill issued">self-signed</span>{{else}}<span class="pill issued">certificate files</span>{{end}}</dd>

@@ -589,6 +589,19 @@ func TestPassthrough(t *testing.T) {
 	}
 }
 
+func TestVersionCommand(t *testing.T) {
+	for _, arg := range []string{"version", "--version"} {
+		var out bytes.Buffer
+		var errb bytes.Buffer
+		if err := run([]string{arg}, strings.NewReader(""), &out, &errb); err != nil {
+			t.Fatalf("%s: %v", arg, err)
+		}
+		if !strings.HasPrefix(out.String(), "gh-appauth ") {
+			t.Errorf("%s printed %q", arg, out.String())
+		}
+	}
+}
+
 func TestPermFlags(t *testing.T) {
 	p := permFlags{}
 	if err := p.Set("contents=read"); err != nil || p["contents"] != "read" {

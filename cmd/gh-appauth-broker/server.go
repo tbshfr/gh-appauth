@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tbshfr/gh-appauth/internal/api"
+	"github.com/tbshfr/gh-appauth/internal/buildinfo"
 	"github.com/tbshfr/gh-appauth/internal/repo"
 )
 
@@ -48,6 +49,7 @@ type Options struct {
 }
 
 type ServerInfo struct {
+	Version        string
 	DBPath         string
 	Listen         string
 	UIListen       string
@@ -57,6 +59,8 @@ type ServerInfo struct {
 	TrustedProxies []string
 	SetupURL       string // suggested --broker URL for client setup
 }
+
+func (i ServerInfo) ReleaseURL() string { return buildinfo.ReleaseURL(i.Version) }
 
 type instEntry struct {
 	id      int64

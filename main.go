@@ -19,8 +19,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tbshfr/gh-appauth/internal/buildinfo"
 	"github.com/tbshfr/gh-appauth/internal/repo"
 )
+
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 const usage = `gh appauth: GitHub App tokens for git and gh, from a gh-appauth broker
 
@@ -36,6 +40,7 @@ Usage:
   gh appauth exec [--repo R] -- CMD...
                                     run CMD with GH_TOKEN/GITHUB_TOKEN for R
   gh appauth cache clear            delete locally cached tokens
+  gh appauth version                print the extension version
 
 Internal:
   gh appauth git-credential get|erase|store
@@ -99,6 +104,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 		return errors.New("usage: gh appauth cache clear")
+	case "version", "--version":
+		fmt.Fprintln(stdout, "gh-appauth", buildinfo.Resolve(version))
+		return nil
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil

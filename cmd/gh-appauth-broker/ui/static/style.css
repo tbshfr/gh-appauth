@@ -130,6 +130,7 @@ body.app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-heigh
 .side nav a[aria-current] { background: var(--sunken); color: var(--fg); }
 .side nav a[aria-current] .icon { color: var(--accent); }
 .side-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+dd.version a { color: var(--fg); }
 
 main { width: 100%; max-width: 1180px; margin: 0 auto; padding: 32px 40px 80px; }
 body.auth { display: grid; place-items: center; min-height: 100vh; padding: 24px 16px; }

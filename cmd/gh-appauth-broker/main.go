@@ -21,7 +21,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/tbshfr/gh-appauth/internal/buildinfo"
 )
+
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 const usage = `gh-appauth-broker: GitHub App token broker
 
@@ -30,6 +35,7 @@ Usage:
   gh-appauth-broker check           validate the stored configuration and keys
   gh-appauth-broker set-password    set the admin UI password (read from stdin)
   gh-appauth-broker fingerprint     print the self-signed certificate fingerprint
+  gh-appauth-broker version         print the broker version
 
 Every command takes -data-dir DIR or -db FILE. The database defaults to
 data/broker.db next to the gh-appauth-broker binary.
@@ -50,6 +56,8 @@ func main() {
 		err = cmdSetPassword(args)
 	case "fingerprint":
 		err = cmdFingerprint(args)
+	case "version", "-version", "--version":
+		fmt.Println("gh-appauth-broker", buildinfo.Resolve(version))
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -253,7 +261,7 @@ func serve(c serveConfig, ready chan<- string) error {
 		}
 	}
 
-	info := ServerInfo{DBPath: c.DB, Listen: c.Listen, UIListen: c.UIListen, TLSMode: c.TLSMode, TLSHosts: hosts, SetupURL: setupURL(c.Listen, c.TLSMode)}
+	info := ServerInfo{Version: buildinfo.Resolve(version), DBPath: c.DB, Listen: c.Listen, UIListen: c.UIListen, TLSMode: c.TLSMode, TLSHosts: hosts, SetupURL: setupURL(c.Listen, c.TLSMode)}
 	if certs != nil {
 		info.TLSFingerprint = certs.fingerprint()
 	}
@@ -315,6 +323,7 @@ func serve(c serveConfig, ready chan<- string) error {
 	if certs != nil {
 		scheme = "https"
 	}
+	fmt.Fprintf(os.Stderr, "gh-appauth-broker: version %s\n", info.Version)
 	for _, s := range servers {
 		fmt.Fprintf(os.Stderr, "gh-appauth-broker: %s listening on %s://%s\n", s.name, scheme, s.ln.Addr())
 		go func(s srv) {

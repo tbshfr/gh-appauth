@@ -14,6 +14,7 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 | `shim DIR` / `gh-shim` | Wrapper that gives plain `gh` an App token for the repo the command targets. See [Which repo the shim picks](#which-repo-the-shim-picks). |
 | `exec [--repo R] -- CMD…` | Runs CMD with `GH_TOKEN` and `GITHUB_TOKEN` set. Without `--repo` it uses `$GH_REPO`, then `$GH_APPAUTH_REPO`, then the remote gh would use in the current folder. |
 | `cache clear` | Deletes locally cached tokens. |
+| `version` | Prints the extension version. |
 
 ## Environment variables
 
