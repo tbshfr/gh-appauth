@@ -12,6 +12,8 @@ jobs:
 
     permissions:
       contents: write
+      # git-cliff reads closed PRs to link commits to PR numbers.
+      pull-requests: read
 
     steps:
       - name: Checkout repo
