@@ -132,8 +132,8 @@ func NewBroker(store *Store, opts Options) (*Broker, error) {
 func (b *Broker) now() time.Time { return b.opts.Now() }
 
 // Reload rebuilds the config snapshot from the database. On error the current
-// snapshot stays in place. Tokens of clients or apps that no longer exist (or
-// are disabled) are revoked.
+// snapshot stays in place. Live tokens the new configuration would no longer
+// issue are revoked.
 func (b *Broker) Reload() error {
 	rows, err := b.store.LoadConfig()
 	if err != nil {
@@ -149,24 +149,70 @@ func (b *Broker) Reload() error {
 	b.ids = map[string]*identity{}
 	b.mu.Unlock()
 
-	orphans, err := b.store.RevokeOrphans(b.now())
+	now := b.now()
+	toks, err := b.store.ActiveTokens(now)
 	if err != nil {
 		return err
 	}
-	for _, t := range orphans {
-		b.audit(&RequestRow{TS: b.now(), Event: "revoked", Client: t.Client, Repo: t.Repo, App: t.App,
-			Perms: permString(t.Permissions), Reason: "client or app removed"})
-		go b.revokeAtGitHub(t.Token)
+	for _, t := range toks {
+		reason := staleReason(st, t)
+		if reason == "" {
+			continue
+		}
+		if err := b.store.MarkRevoked(t.ID, reason, now); err != nil {
+			return err
+		}
+		go b.revokeAtGitHub(t.Token, &RequestRow{TS: now, Event: "revoked", Client: t.Client, Repo: t.Repo, App: t.App,
+			Perms: permString(t.Permissions), Reason: reason})
 	}
 	return nil
 }
 
-func (b *Broker) revokeAtGitHub(token string) {
+// tokenKey identifies interchangeable tokens: same client, App, repo and
+// requested permissions. The App ID is part of it so that replacing an App
+// under the same name does not keep serving the old App's tokens.
+func tokenKey(client string, app *appState, repoLower, perms string) string {
+	return strings.Join([]string{client, fmt.Sprintf("%s#%d", app.Name, app.AppID), repoLower, perms}, "|")
+}
+
+// staleReason says why st would no longer issue token t, or "" if it would.
+func staleReason(st *state, t *TokenRow) string {
+	cl := st.clients[t.Client]
+	if cl == nil || cl.Disabled {
+		return "client removed or disabled"
+	}
+	app := st.apps[t.App]
+	if app == nil {
+		return "app removed"
+	}
+	g := cl.grantFor(t.Repo)
+	if g == nil || g.App != t.App {
+		return "grant removed"
+	}
+	// The last key segment holds the permissions the token was requested
+	// with. t.Permissions is what GitHub reported, which can include extras
+	// such as metadata=read, so it can't be compared against the grant.
+	requested := t.CacheKey[strings.LastIndexByte(t.CacheKey, '|')+1:]
+	if t.CacheKey != tokenKey(t.Client, app, t.Repo, requested) {
+		return "app replaced"
+	}
+	if p, err := narrow(g.Perms, parsePermString(requested)); err != nil || permString(p) != requested {
+		return "grant permissions changed"
+	}
+	return ""
+}
+
+// revokeAtGitHub revokes token at GitHub and then records ev, noting a
+// failed revocation in its reason so it shows up in the history.
+func (b *Broker) revokeAtGitHub(token string, ev *RequestRow) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := b.gh.revoke(ctx, token); err != nil {
-		fmt.Fprintf(os.Stderr, "gh-appauth-broker: revoking token at GitHub: %v\n", err)
+	err := b.gh.revoke(ctx, token)
+	if err != nil {
+		ev.Reason += " (GitHub revoke failed: " + err.Error() + ")"
 	}
+	b.audit(ev)
+	return err
 }
 
 // RevokeToken revokes one issued token (UI action).
@@ -181,15 +227,8 @@ func (b *Broker) RevokeToken(id int64, reason string) error {
 	if err := b.store.MarkRevoked(id, reason, b.now()); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	ghErr := b.gh.revoke(ctx, t.Token)
-	ev := &RequestRow{TS: b.now(), Event: "revoked", Client: t.Client, Repo: t.Repo, App: t.App, Perms: permString(t.Permissions), Reason: reason}
-	if ghErr != nil {
-		ev.Reason += " (GitHub revoke failed: " + ghErr.Error() + ")"
-	}
-	b.audit(ev)
-	return ghErr
+	return b.revokeAtGitHub(t.Token, &RequestRow{TS: b.now(), Event: "revoked", Client: t.Client, Repo: t.Repo, App: t.App,
+		Perms: permString(t.Permissions), Reason: reason})
 }
 
 // ---- audit ----
@@ -397,7 +436,9 @@ func (b *Broker) handleInvalidate(w http.ResponseWriter, r *http.Request) {
 		_ = b.store.MarkRevoked(t.ID, "rejected by GitHub (reported by client)", b.now())
 		ev.Event, ev.Repo, ev.App, ev.Perms = "invalidated", t.Repo, t.App, permString(t.Permissions)
 		ev.Reason = "client reported token rejected"
-		b.audit(ev)
+		// The client's word is not proof that GitHub rejected the token, and
+		// a token dropped from the table can no longer be revoked from the UI.
+		go b.revokeAtGitHub(t.Token, ev)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -472,7 +513,7 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 	ev.Perms = permString(perms)
 
-	key := strings.Join([]string{cl.Name, app.Name, full, ev.Perms}, "|")
+	key := tokenKey(cl.Name, app, full, ev.Perms)
 	unlock := b.lockKey(key)
 	defer unlock()
 
@@ -515,7 +556,12 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 		IssuedAt: now, ExpiresAt: res.ExpiresAt,
 	}
 	if err := b.store.InsertToken(row, now); err != nil {
-		fmt.Fprintf(os.Stderr, "gh-appauth-broker: caching token: %v\n", err)
+		// An unrecorded token could never be revoked, so don't hand it out.
+		msg := "database error: " + err.Error()
+		ev.Event, ev.Status, ev.Reason = "error", 500, msg
+		go b.revokeAtGitHub(res.Token, ev)
+		writeJSON(w, 500, api.Error{Error: msg})
+		return
 	}
 	ev.Event, ev.Status = "issued", 200
 	b.audit(ev)

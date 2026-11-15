@@ -277,6 +277,17 @@ func permString(p map[string]string) string {
 	return b.String()
 }
 
+// parsePermString is the inverse of permString.
+func parsePermString(s string) map[string]string {
+	p := map[string]string{}
+	for _, kv := range strings.Split(s, ",") {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			p[k] = v
+		}
+	}
+	return p
+}
+
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])

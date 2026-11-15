@@ -512,33 +512,6 @@ func (s *Store) MarkRevoked(id int64, reason string, now time.Time) error {
 	return err
 }
 
-// RevokeOrphans marks live tokens whose client is gone or disabled, or whose
-// app is gone, as revoked and returns them so the caller can also revoke them
-// at GitHub.
-func (s *Store) RevokeOrphans(now time.Time) ([]*TokenRow, error) {
-	rows, err := s.db.Query(`SELECT `+tokenCols+` FROM tokens WHERE revoked_at IS NULL AND expires_at>? AND (
-		client NOT IN (SELECT name FROM clients WHERE disabled=0) OR app NOT IN (SELECT name FROM apps))`, now.Unix())
-	if err != nil {
-		return nil, err
-	}
-	var out []*TokenRow
-	for rows.Next() {
-		t, err := scanToken(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	rows.Close()
-	for _, t := range out {
-		if err := s.MarkRevoked(t.ID, "client or app removed", now); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 // ---- request history ----
 
 type RequestRow struct {

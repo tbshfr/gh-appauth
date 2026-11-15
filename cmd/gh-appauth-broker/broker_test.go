@@ -466,6 +466,49 @@ func TestReloadRevokesAndKeepsOldOnError(t *testing.T) {
 	}
 }
 
+func TestReloadRevokesOnGrantChange(t *testing.T) {
+	e := newEnv(t, nil)
+	core := e.token(secretA, "acme/api-core", nil)
+	narrowed := e.token(secretA, "acme/api-auth", map[string]string{"contents": "read"})
+	web := e.token(secretA, "acme/web", nil)
+	bob := e.token(secretB, "acme/api-core", nil)
+	for _, r := range []resp{core, narrowed, web, bob} {
+		if r.code != 200 {
+			t.Fatal(r.code, r.body)
+		}
+	}
+	// An unrelated reload keeps everything.
+	must(t, e.b.Reload())
+	if n := e.gh.CallCount("DELETE /installation/token"); n != 0 {
+		t.Fatalf("reload without changes revoked %d token(s)", n)
+	}
+
+	// Cap alice's first grant at contents=read and drop her second one.
+	_, err := e.store.db.Exec(`UPDATE grants SET permissions='{"contents":"read"}' WHERE client='alice' AND app='backend-bot'`)
+	must(t, err)
+	_, err = e.store.db.Exec(`DELETE FROM grants WHERE client='alice' AND app='frontend-bot'`)
+	must(t, err)
+	must(t, e.b.Reload())
+	waitFor(t, func() bool { return !e.gh.TokenValid(core.tok.Token) && !e.gh.TokenValid(web.tok.Token) })
+	if !e.gh.TokenValid(narrowed.tok.Token) {
+		t.Fatal("token within the new cap was revoked")
+	}
+	if !e.gh.TokenValid(bob.tok.Token) {
+		t.Fatal("another client's token was revoked")
+	}
+	if r := e.token(secretA, "acme/api-auth", map[string]string{"contents": "read"}); r.tok.Token != narrowed.tok.Token {
+		t.Fatal("surviving token is no longer served from cache")
+	}
+}
+
+func TestReloadRevokesOnAppReplaced(t *testing.T) {
+	e := newEnv(t, nil)
+	r := e.token(secretB, "acme/api-core", nil)
+	must(t, e.store.PutApp(AppRow{Name: "backend-bot", AppID: 999, PrivateKey: key1PEM}))
+	must(t, e.b.Reload())
+	waitFor(t, func() bool { return !e.gh.TokenValid(r.tok.Token) })
+}
+
 func TestDisabledClient(t *testing.T) {
 	e := newEnv(t, nil)
 	must(t, e.store.UpdateClient(ClientRow{Name: "alice", Disabled: true}))
@@ -490,6 +533,7 @@ func TestInvalidate(t *testing.T) {
 	if r2.code != 200 || r2.tok.Token == r1.tok.Token || r2.tok.Cached {
 		t.Fatal("expected a freshly minted token after invalidate")
 	}
+	waitFor(t, func() bool { return !e.gh.TokenValid(r1.tok.Token) })
 }
 
 func TestIdentityFailureDoesNotFail(t *testing.T) {

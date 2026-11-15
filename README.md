@@ -25,7 +25,7 @@ The repo builds two programs:
 An agent that holds a client secret can still get tokens for the repos it's granted. The broker adds the following:
 
 - The App private key can't be stolen from an agent machine.
-- Each client has its own secret, and you can revoke it in one place (the UI or the database). Revoking a client also revokes its live tokens at GitHub.
+- Each client has its own secret, and you can revoke it in one place (the UI or the database). Revoking a client, removing or narrowing a grant, or replacing an App also revokes the affected live tokens at GitHub.
 - Permissions are capped per grant, and every token covers a single repo.
 - The audit log is central: JSON lines on stdout, plus request history in the UI.
 - Optionally, `allowed_cidrs` makes a copied secret useless from another address.
@@ -168,6 +168,7 @@ The environment variables `GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_
 | Add a client | UI → Clients → New client. Give the secret to the agent machine and run `gh appauth setup`. |
 | Rotate a secret | Client page → *Generate new secret*. Re-run `setup` on the client, then remove the old secret. Both work in the meantime. |
 | Revoke a client | Client page → Disabled, or *Delete client*. It gets 401 immediately and its live tokens are revoked at GitHub. |
+| Change a grant | Client page → edit or remove the grant. Live tokens the new grants no longer cover are revoked at GitHub. |
 | Revoke one token | Dashboard → *Revoke*. |
 | Rotate an App key | Generate a new key in GitHub, then Apps → save it under the same name. Delete the old key in GitHub. |
 | Reload | UI changes apply immediately. `systemctl reload gh-appauth-broker` (SIGHUP) re-reads the database and TLS certificate files; an invalid state is rejected and the broker keeps running on the old one. |
