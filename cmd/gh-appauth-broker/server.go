@@ -564,6 +564,9 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 	} else if t != nil {
 		b.store.HitToken(t.ID)
 		ev.Event, ev.Status, ev.Cached = "issued", 200, true
+		// Log what the token actually carries: with no permissions requested it
+		// gets the installation's full set, which only GitHub's response tells us.
+		ev.Perms = permString(t.Permissions)
 		b.audit(ev)
 		writeJSON(w, 200, api.TokenResponse{
 			Token: t.Token, ExpiresAt: t.ExpiresAt.UTC(), Repository: full, App: app.Name, Permissions: t.Permissions,
@@ -606,6 +609,7 @@ func (b *Broker) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ev.Event, ev.Status = "issued", 200
+	ev.Perms = permString(res.Permissions)
 	b.audit(ev)
 	writeJSON(w, 200, api.TokenResponse{
 		Token: res.Token, ExpiresAt: res.ExpiresAt.UTC(), Repository: full, App: app.Name, Permissions: res.Permissions,

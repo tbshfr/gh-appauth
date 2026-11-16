@@ -88,8 +88,10 @@ func newUI(b *Broker) *ui {
 			}
 			return strings.ReplaceAll(permString(extra), ",", ", ")
 		},
-		"common":  func() []string { return commonPerms },
-		"noperms": func() map[string]string { return map[string]string{} },
+		"permList":    permList,
+		"permSummary": permSummary,
+		"common":      func() []string { return commonPerms },
+		"noperms":     func() map[string]string { return map[string]string{} },
 		"dict": func(kv ...any) map[string]any {
 			m := map[string]any{}
 			for i := 0; i+1 < len(kv); i += 2 {
@@ -115,6 +117,39 @@ func newUI(b *Broker) *ui {
 		u.pages[base] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(uiFS, "ui/templates/layout.html", n))
 	}
 	return u
+}
+
+type permEntry struct{ Name, Level string }
+
+func permList(s string) []permEntry {
+	var out []permEntry
+	for kv := range strings.SplitSeq(s, ",") {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			out = append(out, permEntry{k, v})
+		}
+	}
+	return out
+}
+
+// permSummary counts permissions per level, highest first: "4 write · 2 read".
+func permSummary(ps []permEntry) string {
+	n := map[string]int{}
+	for _, p := range ps {
+		n[p.Level]++
+	}
+	var parts []string
+	known := 0
+	for _, lvl := range []string{"admin", "write", "read"} {
+		if n[lvl] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n[lvl], lvl))
+			known += n[lvl]
+		}
+	}
+	// Denied requests are logged as sent, so a level can be anything.
+	if other := len(ps) - known; other > 0 {
+		parts = append(parts, fmt.Sprintf("%d invalid", other))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func isCommonPerm(k string) bool {

@@ -319,6 +319,19 @@ func TestEmptyGrantMeansInstallationPermissions(t *testing.T) {
 		t.Fatalf("permissions = %v", r.tok.Permissions)
 	}
 	e.noJWTErrors() // PKCS#8 key works
+
+	if r2 := e.token(secretA, "acme/web", nil); !r2.tok.Cached {
+		t.Fatal("expected cached token")
+	}
+	rows, _ := e.store.Requests(RequestFilter{Event: "issued"})
+	if len(rows) != 2 {
+		t.Fatalf("issued rows = %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.Perms != permString(r.tok.Permissions) {
+			t.Fatalf("logged perms = %q, want the token's %q", row.Perms, permString(r.tok.Permissions))
+		}
+	}
 }
 
 func TestCacheHit(t *testing.T) {

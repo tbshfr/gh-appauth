@@ -48,6 +48,7 @@
 </body>
 </html>
 {{define "i-key"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8.5" cy="15.5" r="4.5"/><path d="M11.7 12.3 20 4M16.5 7.5l3 3"/></svg>{{end}}
+{{define "permcell"}}{{with permList .}}<details class="perms" title="{{spaced $}}"><summary>{{permSummary .}}</summary><ul>{{range .}}<li><span class="mono">{{.Name}}</span><span class="lvl {{.Level}}">{{.Level}}</span></li>{{end}}</ul></details>{{else}}<span class="muted">—</span>{{end}}{{end}}
 {{define "events"}}
 <div class="table-wrap">
 <table class="log">
@@ -59,7 +60,7 @@
     <td class="nowrap"><span class="pill {{.Event}}">{{.Event}}{{if .Cached}} · cached{{end}}</span>{{if .Status}} <span class="muted small">{{.Status}}</span>{{end}}</td>
     <td class="nowrap">{{if .Client}}<a href="/ui/clients/{{.Client}}">{{.Client}}</a>{{else}}<span class="muted">unknown</span>{{end}}<div class="sub mono">{{.IP}}</div></td>
     <td class="nowrap">{{if .Repo}}<span class="mono">{{.Repo}}</span>{{else}}<span class="muted">—</span>{{end}}{{if .App}}<div class="sub">{{.App}}</div>{{end}}</td>
-    <td class="mono dim perms">{{spaced .Perms}}</td>
+    <td class="perms">{{template "permcell" .Perms}}</td>
     <td class="dim detail">{{.Reason}}</td>
   </tr>
   {{else}}
@@ -79,7 +80,7 @@
     <td class="nowrap"><a href="/ui/clients/{{.Client}}">{{.Client}}</a></td>
     <td class="mono nowrap">{{.Repo}}</td>
     <td class="nowrap">{{.App}}</td>
-    <td class="mono dim perms">{{spaced (perms .Permissions)}}</td>
+    <td class="perms">{{template "permcell" (perms .Permissions)}}</td>
     <td class="mono muted nowrap">{{hint .Token}}</td>
     <td class="nowrap dim" title="{{ts .IssuedAt}}">{{ago .IssuedAt}}</td>
     <td class="nowrap dim" title="{{ts .ExpiresAt}}">{{until .ExpiresAt}}</td>

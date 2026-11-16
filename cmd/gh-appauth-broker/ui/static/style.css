@@ -197,7 +197,18 @@ tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td:not(.empty) { background: color-mix(in srgb, var(--sunken) 55%, transparent); }
 table.log td { vertical-align: top; }
 table.log .pill { vertical-align: top; margin-top: -1px; }
-td.perms { min-width: 210px; }
+td.perms { min-width: 150px; white-space: nowrap; }
+details.perms > summary { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12.5px; cursor: pointer; list-style: none; user-select: none; }
+details.perms > summary::-webkit-details-marker { display: none; }
+details.perms > summary::after { content: ""; width: 10px; height: 10px; background: url(chevron.svg) center / 10px no-repeat; opacity: .6; transition: transform .15s; }
+details.perms[open] > summary::after { transform: rotate(180deg); }
+details.perms > summary:hover { color: var(--fg); }
+details.perms ul { display: grid; grid-template-columns: auto auto; gap: 2px 14px; margin: 6px 0 2px; padding: 0; list-style: none; }
+details.perms li { display: contents; }
+details.perms li .mono { color: var(--fg-2); }
+details.perms .lvl { color: var(--muted); font-size: 12px; }
+details.perms .lvl.write { color: var(--accent); }
+details.perms .lvl.admin { color: var(--warn); }
 td.detail { min-width: 260px; }
 td .sub { margin-top: 1px; color: var(--muted); font-size: 12px; }
 td .mono { font-size: 12.5px; }
