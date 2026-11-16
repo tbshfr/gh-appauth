@@ -50,6 +50,7 @@ Usage:
 Internal:
   gh appauth git-credential get|erase|store
   gh appauth git-hook post-checkout OLD NEW FLAG
+  gh appauth git-hook prepare-commit-msg FILE [SOURCE [SHA]]
   gh appauth gh-shim ARGS...
 
 Environment: GH_APPAUTH_BROKER, GH_APPAUTH_SECRET, GH_APPAUTH_CA_FILE,

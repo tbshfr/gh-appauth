@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -216,8 +217,11 @@ func cmdGitSetup(stdout, stderr io.Writer) error {
 		{"config", "--global", "--add", section + ".helper", ""},
 		{"config", "--global", "--add", section + ".helper", "!" + shellQuote(self) + " git-credential"},
 		{"config", "--global", section + ".useHttpPath", "true"},
-		{"config", "--global", "--replace-all", "hook." + hookName + ".command", hookCommand(self)},
-		{"config", "--global", "--replace-all", "hook." + hookName + ".event", "post-checkout"},
+	}
+	for _, h := range hooks {
+		steps = append(steps,
+			[]string{"config", "--global", "--replace-all", "hook." + h.name + ".command", hookCommand(self, h.event)},
+			[]string{"config", "--global", "--replace-all", "hook." + h.name + ".event", h.event})
 	}
 	for _, s := range steps {
 		if _, err := gitOut(s...); err != nil {
@@ -226,6 +230,9 @@ func cmdGitSetup(stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "git now asks gh-appauth for https://%s credentials (helper: %s)\n", cfg.GitHubHost(), self)
 	fmt.Fprintln(stdout, "repos without their own user.name/user.email get the App's bot identity on clone, fetch or push (turn off with: git config --global gh-appauth.autoIdentity false)")
+	if v, _ := gitOut("config", "--get", "gh-appauth.coAuthor"); v == "" {
+		fmt.Fprintln(stdout, `to credit yourself on the bot's commits: git config --global gh-appauth.coAuthor "Name <email>"`)
+	}
 	if remotes, err := gitOut("remote", "-v"); err == nil {
 		for _, line := range strings.Split(remotes, "\n") {
 			f := strings.Fields(line)
@@ -316,35 +323,116 @@ func maybeSetIdentity(cfg *Config, r string, t *api.TokenResponse, stderr io.Wri
 // Config-defined hooks need git 2.54; older versions ignore the setting.
 const hookName = "gh-appauth"
 
-// The hook lives in the global config, so it runs in every repo. If the binary
-// is gone (uninstalled, or the config is shared into a container), it has to
-// do nothing: a failing post-checkout makes clone, checkout and worktree add
-// exit non-zero. The function wrapper is needed because git appends the hook's
-// arguments to the command string.
-func hookCommand(self string) string {
-	q := shellQuote(self)
-	return "f() { test -x " + q + " || return 0; " + q + ` git-hook post-checkout "$@"; }; f`
+// post-checkout keeps the bare name older versions registered, so git-setup
+// replaces it instead of adding a second one.
+var hooks = []struct{ name, event string }{
+	{hookName, "post-checkout"},
+	{hookName + "-prepare-commit-msg", "prepare-commit-msg"},
 }
 
-// post-checkout with an all-zero old ref means a fresh clone or worktree. This
-// covers public repos: their clone never asks the credential helper, so
-// nothing else would set the identity before the first commit.
+// The hooks run in every repo. If the binary is gone (uninstalled, or the
+// config is shared into a container), they must do nothing: a failing hook
+// makes clone, checkout or commit fail. The function wrapper is needed because
+// git appends the hook's arguments to the command string.
+func hookCommand(self, event string) string {
+	q := shellQuote(self)
+	return "f() { test -x " + q + " || return 0; " + q + " git-hook " + event + ` "$@"; }; f`
+}
+
+// Always nil: a failing hook would abort the git command.
 func cmdGitHook(args []string, stderr io.Writer) error {
-	if len(args) != 4 || args[0] != "post-checkout" || strings.Trim(args[1], "0") != "" {
+	if len(args) == 0 {
 		return nil
+	}
+	switch args[0] {
+	case "post-checkout":
+		hookPostCheckout(args[1:], stderr)
+	case "prepare-commit-msg":
+		hookCoAuthor(args[1:], stderr)
+	}
+	return nil
+}
+
+// An all-zero old ref means a fresh clone or worktree. This covers public
+// repos: their clone never asks the credential helper, so nothing else would
+// set the identity before the first commit.
+func hookPostCheckout(args []string, stderr io.Writer) {
+	if len(args) != 3 || strings.Trim(args[0], "0") != "" {
+		return
 	}
 	cfg, err := loadConfig()
 	if err != nil {
-		return nil
+		return
 	}
 	r := autoIdentityRepo(cfg)
 	if r == "" {
-		return nil
+		return
 	}
 	// A denial is normal here (a public repo the client has no grant for),
 	// so it stays quiet.
 	if t, _, err := getToken(cfg, r, nil); err == nil {
 		maybeSetIdentity(cfg, r, t, stderr)
 	}
-	return nil
+}
+
+var (
+	coAuthorRE = regexp.MustCompile(`^[^<>\n]*[^<>\s] <[^<>\s@]+@[^<>\s]+>$`)
+	botIdentRE = regexp.MustCompile(`<[^<>]*\[bot\]@users\.noreply\.[^<>]+>`)
+)
+
+// Only commits made without an editor get the trailer: git then keeps the
+// message as given, so an empty message is the only abort to preserve.
+func hookCoAuthor(args []string, stderr io.Writer) {
+	// git sets GIT_EDITOR=: for the hook when no editor will open.
+	if len(args) < 2 || args[1] == "template" || os.Getenv("GIT_EDITOR") != ":" {
+		return
+	}
+	file := args[0]
+	coAuthor, _ := gitOut("config", "--get", "gh-appauth.coAuthor")
+	if coAuthor == "" {
+		return
+	}
+	if !coAuthorRE.MatchString(coAuthor) {
+		fmt.Fprintf(stderr, "gh-appauth: warning: gh-appauth.coAuthor %q isn't \"Name <email>\", no Co-authored-by trailer added\n", coAuthor)
+		return
+	}
+	if replayingCommit() {
+		return
+	}
+	if ident, err := gitOut("var", "GIT_AUTHOR_IDENT"); err != nil || !botIdentRE.MatchString(ident) {
+		return
+	}
+	msg, err := os.ReadFile(file)
+	if err != nil || isEmptyMessage(string(msg)) {
+		return
+	}
+	if _, err := gitOut("interpret-trailers", "--in-place", "--no-divider", "--if-exists", "addIfDifferent",
+		"--trailer", "Co-authored-by: "+coAuthor, file); err != nil {
+		fmt.Fprintf(stderr, "gh-appauth: warning: adding the Co-authored-by trailer: %v\n", err)
+	}
+}
+
+// Rebase and cherry-pick replay a commit under its original author, but only
+// export that author to the hooks when they fall back to running git commit
+// (after a conflict). Otherwise git var reports the configured identity.
+func replayingCommit() bool {
+	if os.Getenv("GIT_AUTHOR_DATE") != "" {
+		return false
+	}
+	head, err := gitOut("rev-parse", "--git-path", "CHERRY_PICK_HEAD")
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(head)
+	return err == nil
+}
+
+// git ignores sign-offs when it checks for an empty message.
+func isEmptyMessage(msg string) bool {
+	for line := range strings.Lines(msg) {
+		if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "Signed-off-by: ") {
+			return false
+		}
+	}
+	return true
 }

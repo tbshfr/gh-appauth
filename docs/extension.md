@@ -10,7 +10,7 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 | `status` | Broker reachability and latency, TLS details, client, grants, and for the current repo the App, bot, expiry, permissions and token source (never the token itself). |
 | `token [OWNER/REPO] [--perm k=v]... [--json]` | Prints a token. The default repo is the current folder's `origin`. |
 | `repos OWNER [--no-archived] [--json]` | Lists OWNER's repos this client can get a token for, one per line with tab-separated name, default branch, visibility and App. Use it in place of `gh repo list OWNER`, which can't see past a single repo. |
-| `git-setup` | Sets up the credential helper for `https://github.com`, clears inherited helpers, and registers a `post-checkout` hook for the [automatic bot identity](#commit-identity). Warns about SSH remotes. |
+| `git-setup` | Sets up the credential helper for `https://github.com`, clears inherited helpers, and registers a `post-checkout` hook for the [automatic bot identity](#commit-identity) and a `prepare-commit-msg` hook for the optional [co-author trailer](#crediting-yourself-as-co-author). Warns about SSH remotes. |
 | `identity` | Sets repo-local `user.name` and `user.email` to the App bot. Usually not needed, see [Commit identity](#commit-identity). |
 | `shim DIR` / `gh-shim` | Wrapper that gives plain `gh` an App token for the repo the command targets. See [Which repo the shim picks](#which-repo-the-shim-picks). |
 | `exec [--repo R] -- CMD…` | Runs CMD with `GH_TOKEN` and `GITHUB_TOKEN` set. Without `--repo` it uses `$GH_REPO`, then `$GH_APPAUTH_REPO`, then the remote gh would use in the current folder. |
@@ -32,6 +32,18 @@ Commits show up as the App's bot when the repo's own config (`.git/config`) sets
 A line on stderr says when the identity was set. To turn this off, run `git config --global gh-appauth.autoIdentity false`, or set it in a single repo without `--global`.
 
 When you clone a public repo the client has no grant for, the hook's token request is refused. The broker records it in the request history, and nothing else happens.
+
+### Crediting yourself as co-author
+
+To add yourself as co-author on the bot's commits:
+
+```sh
+git config --global gh-appauth.coAuthor "Your Name <ID+login@users.noreply.github.com>"
+```
+
+Use an email that is verified on your GitHub account, such as the noreply address shown under Settings -> Emails. Only commits authored by a GitHub App bot (`…[bot]@users.noreply.…`) get the `Co-authored-by` trailer, so your own commits stay as they are. The setting is off by default. To turn it off in one repo, run `git config gh-appauth.coAuthor ""` there.
+
+The trailer is added by a `prepare-commit-msg` hook that `git-setup` registers, so it also works with `--no-verify`. If you ran `git-setup` before this feature existed, run it again. Only commits made without the editor get the trailer: `git commit -m`, `-F`, `--amend --no-edit` (which doesn't add a second one) and merges with `--no-edit`. For a message you write in the editor, add the trailer yourself. Commits that `git rebase` or `git cherry-pick` replay without a conflict keep their message. Like the `post-checkout` hook, this needs git 2.54 or later.
 
 ## Which repo the shim picks
 

@@ -18,6 +18,17 @@ import (
 	"github.com/tbshfr/gh-appauth/internal/api"
 )
 
+// Lets git run the test binary as the extension from hooks a test registers.
+func TestMain(m *testing.M) {
+	if os.Getenv("GH_APPAUTH_TEST_RUN") != "" {
+		if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
 type fakeBroker struct {
 	mu          sync.Mutex
 	srv         *httptest.Server
@@ -747,14 +758,155 @@ func TestGitHookSetsIdentityOnClone(t *testing.T) {
 
 func TestHookCommandToleratesMissingBinary(t *testing.T) {
 	gitRepo(t, "https://github.com/acme/web.git")
-	for _, args := range [][]string{
-		{"config", "--global", "hook." + hookName + ".command", hookCommand(filepath.Join(t.TempDir(), "gone"))},
-		{"config", "--global", "hook." + hookName + ".event", "post-checkout"},
-		{"-c", "user.name=x", "-c", "user.email=x@x", "commit", "-q", "--allow-empty", "-m", "init"},
-		{"checkout", "-q", "-b", "other"},
-	} {
+	gone := filepath.Join(t.TempDir(), "gone")
+	var steps [][]string
+	for _, h := range hooks {
+		steps = append(steps,
+			[]string{"config", "--global", "hook." + h.name + ".command", hookCommand(gone, h.event)},
+			[]string{"config", "--global", "hook." + h.name + ".event", h.event})
+	}
+	steps = append(steps,
+		[]string{"-c", "user.name=x", "-c", "user.email=x@x", "commit", "-q", "--allow-empty", "-m", "init"},
+		[]string{"checkout", "-q", "-b", "other"})
+	for _, args := range steps {
 		if _, err := gitOut(args...); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestCoAuthorTrailer(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const bot, me = "1+a[bot]@users.noreply.github.com", "Me <me@example.com>"
+	const trailer = "Co-authored-by: " + me
+	setup := func(t *testing.T) {
+		gitRepo(t, "https://github.com/acme/web.git")
+		t.Setenv("GH_APPAUTH_TEST_RUN", "1")
+		// GIT_EDITOR wins over core.editor; IDE terminals often set it.
+		t.Setenv("GIT_EDITOR", "")
+		os.Unsetenv("GIT_EDITOR")
+		for _, h := range hooks[1:] {
+			for _, args := range [][]string{
+				{"config", "--global", "hook." + h.name + ".command", hookCommand(self, h.event)},
+				{"config", "--global", "hook." + h.name + ".event", h.event},
+			} {
+				if _, err := gitOut(args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for _, kv := range [][2]string{{"user.name", "a[bot]"}, {"user.email", bot}, {"gh-appauth.coAuthor", me}} {
+			if _, err := gitOut("config", kv[0], kv[1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	commit := func(t *testing.T, args ...string) (string, error) {
+		t.Helper()
+		if _, err := gitOut(append([]string{"commit", "-q", "--allow-empty"}, args...)...); err != nil {
+			return "", err
+		}
+		return gitOut("log", "-1", "--format=%B")
+	}
+
+	for name, tc := range map[string]struct {
+		cfg  [][]string
+		args []string
+		want bool
+	}{
+		"bot author":           {args: []string{"-m", "x"}, want: true},
+		"no-verify":            {args: []string{"--no-verify", "-m", "x"}, want: true},
+		"comment-like subject": {args: []string{"-m", "#42 fix"}, want: true},
+		"divider in message":   {args: []string{"-m", "x\n\n---\nmore"}, want: true},
+		"editor":               {cfg: [][]string{{"core.editor", "printf 'from editor\\n' >>"}}},
+		"-m with -e":           {cfg: [][]string{{"core.editor", "true"}}, args: []string{"-m", "x", "-e"}},
+		"human author":         {args: []string{"--author", "H <h@example.com>", "-m", "x"}},
+		"unset":                {cfg: [][]string{{"--unset", "gh-appauth.coAuthor"}}, args: []string{"-m", "x"}},
+		"off in repo":          {cfg: [][]string{{"gh-appauth.coAuthor", ""}}, args: []string{"-m", "x"}},
+		"malformed":            {cfg: [][]string{{"gh-appauth.coAuthor", "me@example.com"}}, args: []string{"-m", "x"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setup(t)
+			for _, c := range tc.cfg {
+				if _, err := gitOut(append([]string{"config"}, c...)...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			msg, err := commit(t, tc.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(msg, trailer); got != map[bool]int{true: 1}[tc.want] {
+				t.Fatalf("%d trailers in %q", got, msg)
+			}
+		})
+	}
+
+	t.Run("amend keeps one trailer", func(t *testing.T) {
+		setup(t)
+		if _, err := commit(t, "-m", "x"); err != nil {
+			t.Fatal(err)
+		}
+		msg, err := commit(t, "--amend", "--no-edit")
+		if err != nil || strings.Count(msg, trailer) != 1 {
+			t.Fatalf("%q (%v)", msg, err)
+		}
+	})
+
+	tmpl := filepath.Join(t.TempDir(), "template")
+	if err := os.WriteFile(tmpl, []byte("feat: \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		env  string
+		args []string
+		want string
+	}{
+		"empty -m":                {args: []string{"-m", ""}, want: "empty commit message"},
+		"sign-off alone":          {args: []string{"-s", "-m", ""}, want: "empty commit message"},
+		"editor quit":             {args: []string{"-v"}, want: "empty commit message"},
+		"-m '#…' -e quit":         {args: []string{"-m", "#42 fix", "-e"}, want: "empty commit message"},
+		"untouched template":      {args: []string{"-t", tmpl}, want: "did not edit the message"},
+		"GIT_EDITOR=: in the env": {env: ":", want: "empty commit message"},
+	} {
+		t.Run(name+" still aborts", func(t *testing.T) {
+			setup(t)
+			if _, err := gitOut("config", "core.editor", "true"); err != nil {
+				t.Fatal(err)
+			}
+			if tc.env != "" {
+				t.Setenv("GIT_EDITOR", tc.env)
+			}
+			if _, err := commit(t, tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("replayed human commits stay untouched", func(t *testing.T) {
+		setup(t)
+		git := func(args ...string) {
+			t.Helper()
+			if _, err := gitOut(args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		git("commit", "-q", "--allow-empty", "-m", "base")
+		git("branch", "-m", "main")
+		git("checkout", "-q", "-b", "human")
+		git("commit", "-q", "--allow-empty", "--author", "H <h@example.com>", "-m", "human work")
+		git("checkout", "-q", "main")
+		git("commit", "-q", "--allow-empty", "-m", "main moves")
+		git("cherry-pick", "--allow-empty", "human")
+		if msg, _ := gitOut("log", "-1", "--format=%B"); strings.Contains(msg, trailer) {
+			t.Fatalf("cherry-pick added a trailer: %q", msg)
+		}
+		git("checkout", "-q", "human")
+		git("rebase", "-q", "main")
+		if msg, _ := gitOut("log", "-1", "--format=%an %B"); !strings.HasPrefix(msg, "H ") || strings.Contains(msg, trailer) {
+			t.Fatalf("rebase added a trailer: %q", msg)
+		}
+	})
 }

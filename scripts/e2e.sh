@@ -157,6 +157,9 @@ if git hook list post-checkout 2>/dev/null | grep -q gh-appauth; then
   git -C "$WORK/pub" worktree add -q "$WORK/pub-wt" 2>/dev/null
   { [[ "$(git -C "$WORK/pub" config --local user.email)" == "555+backend-bot[bot]@users.noreply.github.com" ]]; } || fail "post-checkout hook sets bot identity"
   pass "post-checkout hook sets bot identity"
+  git -C "$WORK/pub" -c gh-appauth.coAuthor="Me <me@example.com>" commit -q --allow-empty -m co
+  { [[ "$(git -C "$WORK/pub" log -1 --format='%(trailers:key=Co-authored-by,valueonly)')" == "Me <me@example.com>" ]]; } || fail "prepare-commit-msg hook adds Co-authored-by"
+  pass "prepare-commit-msg hook adds Co-authored-by"
 else
   echo "  skip post-checkout hook (git $(git --version | cut -d' ' -f3) has no config-defined hooks)"
 fi
