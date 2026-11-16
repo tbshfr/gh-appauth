@@ -48,6 +48,8 @@ The UI requires the admin password. Sessions last 12 hours and are stored in SQL
 
 To keep the UI away from agents, put it on its own port, for example `-ui-listen 127.0.0.1:8444`, and reach it through an SSH tunnel, or firewall that port.
 
+The UI can be installed as an app (a PWA) from Chrome, Edge or Safari's install or "Add to Dock / Home Screen" option. Browsers allow this only on a secure origin: HTTPS with a certificate the browser trusts, or `http://localhost`, which includes an SSH tunnel to a local port. The installed app opens in its own window at `/ui/`. It caches nothing. Its service worker only shows an offline page when the broker can't be reached.
+
 ## HTTP API
 
 | Method / path | Auth | |

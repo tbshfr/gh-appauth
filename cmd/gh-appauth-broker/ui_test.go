@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -301,6 +302,37 @@ func TestUIPagesRender(t *testing.T) {
 		t.Errorf("CSP = %q", csp)
 	}
 	resp.Body.Close()
+}
+
+// Browsers fetch the manifest without cookies, and the worker and icons are
+// needed before sign-in, so all of them must be served to anonymous clients.
+func TestUIInstallable(t *testing.T) {
+	e := newEnv(t, nil)
+	u := newUIClient(t, e)
+	_, login := u.get("/ui/login")
+	if !strings.Contains(login, `<link rel="manifest" href="/ui/static/manifest.json">`) {
+		t.Error("login page does not link the manifest")
+	}
+	resp, err := u.c.Get(u.srv.URL + "/ui/static/manifest.json")
+	must(t, err)
+	var m struct{ Icons []struct{ Src string } }
+	err = json.NewDecoder(resp.Body).Decode(&m)
+	resp.Body.Close()
+	must(t, err)
+	if resp.StatusCode != 200 || len(m.Icons) == 0 {
+		t.Fatalf("manifest: %d %+v", resp.StatusCode, m)
+	}
+	for _, ic := range m.Icons {
+		if code, _ := u.get(ic.Src); code != 200 {
+			t.Errorf("icon %s: %d", ic.Src, code)
+		}
+	}
+	resp, err = u.c.Get(u.srv.URL + "/ui/sw.js")
+	must(t, err)
+	resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); resp.StatusCode != 200 || !strings.HasPrefix(ct, "text/javascript") {
+		t.Errorf("sw.js: %d %q", resp.StatusCode, ct)
+	}
 }
 
 func TestUIVersion(t *testing.T) {

@@ -203,6 +203,11 @@ func randToken(n int) string {
 func (u *ui) mount(mux *http.ServeMux) {
 	static, _ := fs.Sub(uiFS, "ui/static")
 	mux.Handle("GET /ui/static/", u.headers(http.StripPrefix("/ui/static/", http.FileServer(http.FS(static)))))
+	// A service worker's scope can't be wider than its own directory, so it
+	// is served from /ui/ rather than /ui/static/.
+	mux.Handle("GET /ui/sw.js", u.headers(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, static, "sw.js")
+	})))
 	mux.Handle("GET /{$}", http.RedirectHandler("/ui/", http.StatusFound))
 	mux.Handle("GET /ui", http.RedirectHandler("/ui/", http.StatusFound))
 	mux.Handle("GET /ui/login", u.headers(http.HandlerFunc(u.loginPage)))

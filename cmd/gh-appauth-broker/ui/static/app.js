@@ -64,7 +64,11 @@ document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
   btn.hidden = false;
   btn.addEventListener("click", () => {
     const root = document.documentElement;
-    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(root.dataset.theme === "dark" ? "light" : "dark");
     try { localStorage.setItem("theme", root.dataset.theme); } catch {}
   });
 });
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/ui/sw.js", { scope: "/ui/" }).catch(() => {});
+}
