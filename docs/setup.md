@@ -67,4 +67,6 @@ The agent's OS user must have no `gh auth login` session. Then any `gh` call the
 
 Remotes must use HTTPS. SSH remotes never call the credential helper, and `git-setup` warns when it finds one. See [Known gaps](extension.md#known-gaps) for the other cases that need a workaround, including Windows.
 
+To update the extension later, run `gh extension install --force tbshfr/gh-appauth`. `gh extension upgrade appauth` doesn't work here: the agent user has no `gh auth login` session, and `upgrade` (unlike `install`) refuses to run without one, with "To get started with GitHub CLI, please run: gh auth login". When the extension is already installed, `install --force` upgrades it.
+
 In containers you can skip the config file and set `GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET` and the trust settings as [environment variables](extension.md#environment-variables).
