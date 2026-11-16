@@ -652,3 +652,109 @@ func TestRepos(t *testing.T) {
 		}
 	}
 }
+
+func gitRepo(t *testing.T, origin string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", origin}} {
+		if _, err := gitOut(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func localIdentity(t *testing.T) string {
+	t.Helper()
+	v, _ := gitOut("config", "--local", "--get-regexp", `^user\.(name|email)$`)
+	return v
+}
+
+func TestCredentialSetsIdentity(t *testing.T) {
+	const get = "protocol=https\nhost=github.com\npath=acme/web.git\n\n"
+	t.Run("empty repo config", func(t *testing.T) {
+		isolate(t)
+		useBroker(t, newFakeBroker(t, true))
+		gitRepo(t, "https://github.com/Acme/Web.git")
+		if _, err := gitOut("config", "--global", "user.name", "Human"); err != nil {
+			t.Fatal(err)
+		}
+		_, stderr, err := cred(t, "get", get)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := localIdentity(t), "user.name a[bot]\nuser.email 1+a[bot]@users.noreply.github.com"; got != want {
+			t.Fatalf("local identity %q, want %q", got, want)
+		}
+		if !strings.Contains(stderr, "authored as a[bot]") {
+			t.Fatalf("stderr: %q", stderr)
+		}
+	})
+	for name, setup := range map[string][]string{
+		"own email":        {"config", "user.email", "me@example.com"},
+		"auto off":         {"config", "--global", "gh-appauth.autoIdentity", "off"},
+		"auto typo":        {"config", "--global", "gh-appauth.autoIdentity", "flase"},
+		"different origin": {"remote", "set-url", "origin", "https://github.com/acme/fork.git"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			isolate(t)
+			useBroker(t, newFakeBroker(t, true))
+			gitRepo(t, "https://github.com/acme/web.git")
+			if _, err := gitOut(setup...); err != nil {
+				t.Fatal(err)
+			}
+			before := localIdentity(t)
+			_, stderr, err := cred(t, "get", get)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := localIdentity(t); got != before || stderr != "" {
+				t.Fatalf("identity changed to %q (stderr %q)", got, stderr)
+			}
+		})
+	}
+}
+
+func TestGitHookSetsIdentityOnClone(t *testing.T) {
+	isolate(t)
+	fb := newFakeBroker(t, true)
+	useBroker(t, fb)
+	gitRepo(t, "https://github.com/acme/web.git")
+	hook := func(old string) {
+		t.Helper()
+		var out, errb bytes.Buffer
+		if err := run([]string{"git-hook", "post-checkout", old, strings.Repeat("a", 40), "1"}, nil, &out, &errb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook(strings.Repeat("b", 40))
+	if fb.calls() != 0 || localIdentity(t) != "" {
+		t.Fatal("a plain checkout must not touch the identity")
+	}
+	hook(strings.Repeat("0", 40))
+	if !strings.Contains(localIdentity(t), "a[bot]") {
+		t.Fatalf("identity after clone: %q", localIdentity(t))
+	}
+
+	gitRepo(t, "https://github.com/acme/denied.git")
+	hook(strings.Repeat("0", 64))
+	if localIdentity(t) != "" {
+		t.Fatal("denied repo got an identity")
+	}
+}
+
+func TestHookCommandToleratesMissingBinary(t *testing.T) {
+	gitRepo(t, "https://github.com/acme/web.git")
+	for _, args := range [][]string{
+		{"config", "--global", "hook." + hookName + ".command", hookCommand(filepath.Join(t.TempDir(), "gone"))},
+		{"config", "--global", "hook." + hookName + ".event", "post-checkout"},
+		{"-c", "user.name=x", "-c", "user.email=x@x", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"checkout", "-q", "-b", "other"},
+	} {
+		if _, err := gitOut(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

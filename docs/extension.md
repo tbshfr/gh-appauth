@@ -10,8 +10,8 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 | `status` | Broker reachability and latency, TLS details, client, grants, and for the current repo the App, bot, expiry, permissions and token source (never the token itself). |
 | `token [OWNER/REPO] [--perm k=v]... [--json]` | Prints a token. The default repo is the current folder's `origin`. |
 | `repos OWNER [--no-archived] [--json]` | Lists OWNER's repos this client can get a token for, one per line with tab-separated name, default branch, visibility and App. Use it in place of `gh repo list OWNER`, which can't see past a single repo. |
-| `git-setup` | Sets up the credential helper for `https://github.com` and clears inherited helpers. Warns about SSH remotes. |
-| `identity` | Sets repo-local `user.name` and `user.email` to the App bot. |
+| `git-setup` | Sets up the credential helper for `https://github.com`, clears inherited helpers, and registers a `post-checkout` hook for the [automatic bot identity](#commit-identity). Warns about SSH remotes. |
+| `identity` | Sets repo-local `user.name` and `user.email` to the App bot. Usually not needed, see [Commit identity](#commit-identity). |
 | `shim DIR` / `gh-shim` | Wrapper that gives plain `gh` an App token for the repo the command targets. See [Which repo the shim picks](#which-repo-the-shim-picks). |
 | `exec [--repo R] -- CMD…` | Runs CMD with `GH_TOKEN` and `GITHUB_TOKEN` set. Without `--repo` it uses `$GH_REPO`, then `$GH_APPAUTH_REPO`, then the remote gh would use in the current folder. |
 | `cache clear` | Deletes locally cached tokens. |
@@ -20,6 +20,18 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 ## Environment variables
 
 `GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_CA_FILE`, `GH_APPAUTH_FINGERPRINT` and `GH_APPAUTH_INSECURE_HTTP=1` override the config file, which is useful in containers. `GH_APPAUTH_REPO` tells the `gh` shim and `exec` which repo to use when the command doesn't name one and `GH_REPO` isn't set. It takes priority over the current folder's remotes.
+
+## Commit identity
+
+Commits show up as the App's bot when the repo's own config (`.git/config`) sets `user.name` and `user.email` to the bot. gh-appauth sets them on its own the first time it gets a token for a repo whose config sets neither. A global identity in `~/.gitconfig` doesn't count, so a repo where you set your own identity keeps it. This happens:
+
+- when `git clone`, `fetch`, `pull` or `push` asks the credential helper for the repo in `origin`,
+- when the `gh` shim gets a token for the repo in `origin`,
+- after a clone or `git worktree add`, through the `post-checkout` hook that `git-setup` registers in the global git config. A public repo's clone never asks for credentials, so without the hook the identity would only be set at the first push, after the first commits. Hooks defined in git config need git 2.54 or later; older versions ignore the setting, and you can run `gh appauth identity` after the clone instead. The hook runs next to the repo's own hooks and doesn't replace them.
+
+A line on stderr says when the identity was set. To turn this off, run `git config --global gh-appauth.autoIdentity false`, or set it in a single repo without `--global`.
+
+When you clone a public repo the client has no grant for, the hook's token request is refused. The broker records it in the request history, and nothing else happens.
 
 ## Which repo the shim picks
 

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/tbshfr/gh-appauth/internal/api"
 	"github.com/tbshfr/gh-appauth/internal/repo"
 )
 
@@ -191,6 +192,7 @@ func cmdGitCredential(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		return exitCode(1)
 	}
 	fmt.Fprintf(stdout, "username=x-access-token\npassword=%s\npassword_expiry_utc=%d\n", t.Token, t.ExpiresAt.Unix())
+	maybeSetIdentity(cfg, r, t, stderr)
 	return nil
 }
 
@@ -214,6 +216,8 @@ func cmdGitSetup(stdout, stderr io.Writer) error {
 		{"config", "--global", "--add", section + ".helper", ""},
 		{"config", "--global", "--add", section + ".helper", "!" + shellQuote(self) + " git-credential"},
 		{"config", "--global", section + ".useHttpPath", "true"},
+		{"config", "--global", "--replace-all", "hook." + hookName + ".command", hookCommand(self)},
+		{"config", "--global", "--replace-all", "hook." + hookName + ".event", "post-checkout"},
 	}
 	for _, s := range steps {
 		if _, err := gitOut(s...); err != nil {
@@ -221,6 +225,7 @@ func cmdGitSetup(stdout, stderr io.Writer) error {
 		}
 	}
 	fmt.Fprintf(stdout, "git now asks gh-appauth for https://%s credentials (helper: %s)\n", cfg.GitHubHost(), self)
+	fmt.Fprintln(stdout, "repos without their own user.name/user.email get the App's bot identity on clone, fetch or push (turn off with: git config --global gh-appauth.autoIdentity false)")
 	if remotes, err := gitOut("remote", "-v"); err == nil {
 		for _, line := range strings.Split(remotes, "\n") {
 			f := strings.Fields(line)
@@ -253,6 +258,14 @@ func cmdIdentity(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := setIdentity(t); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "commits in this repo will be authored as %s <%s>\n", t.BotName, t.BotEmail)
+	return nil
+}
+
+func setIdentity(t *api.TokenResponse) error {
 	if t.BotName == "" || t.BotEmail == "" {
 		return errors.New("the broker couldn't determine the App's bot identity (check the broker log)")
 	}
@@ -261,9 +274,77 @@ func cmdIdentity(stdout io.Writer) error {
 	if _, err := gitOut("config", "--local", "user.name", t.BotName); err != nil {
 		return err
 	}
-	if _, err := gitOut("config", "--local", "user.email", t.BotEmail); err != nil {
-		return err
+	_, err := gitOut("config", "--local", "user.email", t.BotEmail)
+	return err
+}
+
+// Only the repo's own config counts as an identity: a global one on an agent
+// machine is usually the human's.
+func autoIdentityRepo(cfg *Config) string {
+	r, err := currentRepo(cfg)
+	if err != nil {
+		return ""
 	}
-	fmt.Fprintf(stdout, "commits in this repo will be authored as %s <%s>\n", t.BotName, t.BotEmail)
+	// An unparsable value makes git fail, which counts as off: a typo in an
+	// opt-out must not leave the feature on.
+	if v, _ := gitOut("config", "--type=bool", "--default=true", "--get", "gh-appauth.autoIdentity"); v != "true" {
+		return ""
+	}
+	if v, _ := gitOut("config", "--local", "--get-regexp", `^user\.(name|email)$`); v != "" {
+		return ""
+	}
+	return r
+}
+
+// Errors are only reported: this runs inside git and gh commands that must not
+// fail because of it.
+func maybeSetIdentity(cfg *Config, r string, t *api.TokenResponse, stderr io.Writer) {
+	if t.BotName == "" || t.BotEmail == "" || !strings.EqualFold(autoIdentityRepo(cfg), r) {
+		return
+	}
+	if err := setIdentity(t); err != nil {
+		// A name without an email would pass for the repo's own identity
+		// and block every later attempt.
+		_ = exec.Command("git", "config", "--local", "--unset-all", "user.name").Run()
+		_ = exec.Command("git", "config", "--local", "--unset-all", "user.email").Run()
+		fmt.Fprintf(stderr, "gh-appauth: warning: setting the bot identity: %v\n", err)
+		return
+	}
+	fmt.Fprintf(stderr, "gh-appauth: commits in this repo will be authored as %s <%s>\n", t.BotName, t.BotEmail)
+}
+
+// Config-defined hooks need git 2.54; older versions ignore the setting.
+const hookName = "gh-appauth"
+
+// The hook lives in the global config, so it runs in every repo. If the binary
+// is gone (uninstalled, or the config is shared into a container), it has to
+// do nothing: a failing post-checkout makes clone, checkout and worktree add
+// exit non-zero. The function wrapper is needed because git appends the hook's
+// arguments to the command string.
+func hookCommand(self string) string {
+	q := shellQuote(self)
+	return "f() { test -x " + q + " || return 0; " + q + ` git-hook post-checkout "$@"; }; f`
+}
+
+// post-checkout with an all-zero old ref means a fresh clone or worktree. This
+// covers public repos: their clone never asks the credential helper, so
+// nothing else would set the identity before the first commit.
+func cmdGitHook(args []string, stderr io.Writer) error {
+	if len(args) != 4 || args[0] != "post-checkout" || strings.Trim(args[1], "0") != "" {
+		return nil
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil
+	}
+	r := autoIdentityRepo(cfg)
+	if r == "" {
+		return nil
+	}
+	// A denial is normal here (a public repo the client has no grant for),
+	// so it stays quiet.
+	if t, _, err := getToken(cfg, r, nil); err == nil {
+		maybeSetIdentity(cfg, r, t, stderr)
+	}
 	return nil
 }

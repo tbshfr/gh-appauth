@@ -40,6 +40,7 @@ Usage:
                                     list OWNER's repos this client can get tokens for
   gh appauth git-setup              configure git to use this credential helper
   gh appauth identity               set user.name/email in this repo to the App bot
+                                    (automatic in repos without their own identity)
   gh appauth shim DIR               install a gh wrapper in DIR (put DIR first in PATH)
   gh appauth exec [--repo R] -- CMD...
                                     run CMD with GH_TOKEN/GITHUB_TOKEN for R
@@ -48,6 +49,7 @@ Usage:
 
 Internal:
   gh appauth git-credential get|erase|store
+  gh appauth git-hook post-checkout OLD NEW FLAG
   gh appauth gh-shim ARGS...
 
 Environment: GH_APPAUTH_BROKER, GH_APPAUTH_SECRET, GH_APPAUTH_CA_FILE,
@@ -95,6 +97,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return cmdGitSetup(stdout, stderr)
 	case "identity":
 		return cmdIdentity(stdout)
+	case "git-hook":
+		return cmdGitHook(rest, stderr)
 	case "shim":
 		return cmdShim(rest, stdout)
 	case "gh-shim":

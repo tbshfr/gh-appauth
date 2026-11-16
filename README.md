@@ -16,7 +16,7 @@ So if your agent goes haywire, it can't open issues or comment under your name, 
 
 ## What it does
 
-- Agents keep using plain `git` and `gh`. `git clone`, `git push` and `gh pr create` work unchanged, and `gh appauth identity` makes commits show up as the App's bot.
+- Agents keep using plain `git` and `gh`. `git clone`, `git push` and `gh pr create` work unchanged, and commits show up as the App's bot in any repo that doesn't set its own `user.name` and `user.email`.
 - Each client has an ordered list of grants. A grant matches repos by glob (`acme/api-*`), picks an App, and caps the permissions. The first matching grant wins.
 - Every token covers a single repo and expires within an hour.
 - Revocation happens in one place. Disabling a client, narrowing a grant or replacing an App revokes the affected live tokens at GitHub right away.

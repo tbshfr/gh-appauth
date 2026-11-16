@@ -61,7 +61,7 @@ The shim only takes effect where its folder comes before the real `gh` in `PATH`
 
 `setup` reads the secret from stdin, checks it against the broker, and prints the grants it found. If the broker's certificate isn't trusted yet, `setup` prints its fingerprint so you can compare it with the one from step 1.
 
-After this, `git clone/fetch/push https://github.com/acme/api-core` and `gh pr create` work unchanged. To make commits show up as the App's bot, run `gh appauth identity` in the repo. It applies to all of the repo's worktrees.
+After this, `git clone/fetch/push https://github.com/acme/api-core` and `gh pr create` work unchanged. Commits show up as the App's bot in repos that don't set their own `user.name` and `user.email`. See [Commit identity](extension.md#commit-identity) for when that's set and how to turn it off.
 
 The agent's OS user must have no `gh auth login` session. Then any `gh` call the shim can't tie to a repo fails, instead of quietly using your personal account.
 

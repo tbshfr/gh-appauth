@@ -142,8 +142,24 @@ WEBTOK=$("$EXT" token acme/web)
 
 { [[ "$("$EXT" repos acme | cut -f1,4 | tr '\t\n' ' ;')" == "acme/api-auth backend-bot;acme/api-core backend-bot;acme/web frontend-bot;" ]]; } || fail "repos lists granted repos"; pass "repos lists granted repos"
 
+{ [[ "$(git config --local user.email)" == "555+backend-bot[bot]@users.noreply.github.com" ]]; } || fail "credential helper sets bot identity"; pass "credential helper sets bot identity"
+git config --local --unset user.email
 "$EXT" identity >/dev/null
 { [[ "$(git config user.email)" == "555+backend-bot[bot]@users.noreply.github.com" ]]; } || fail "identity sets bot email"; pass "identity sets bot email"
+
+# A public repo's clone never asks for credentials, so the post-checkout hook
+# sets the identity. Without a GitHub to clone from, `worktree add` stands in:
+# it runs the hook with the same all-zero old ref as a clone.
+if git hook list post-checkout 2>/dev/null | grep -q gh-appauth; then
+  git init -q "$WORK/pub"
+  git -C "$WORK/pub" remote add origin https://github.com/acme/api-auth.git
+  git -C "$WORK/pub" -c user.name=x -c user.email=x@x commit -q --allow-empty -m init
+  git -C "$WORK/pub" worktree add -q "$WORK/pub-wt" 2>/dev/null
+  { [[ "$(git -C "$WORK/pub" config --local user.email)" == "555+backend-bot[bot]@users.noreply.github.com" ]]; } || fail "post-checkout hook sets bot identity"
+  pass "post-checkout hook sets bot identity"
+else
+  echo "  skip post-checkout hook (git $(git --version | cut -d' ' -f3) has no config-defined hooks)"
+fi
 
 echo "== gh shim"
 mkdir -p "$WORK/realgh"

@@ -309,6 +309,7 @@ func cmdGHShim(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	maybeSetIdentity(cfg, r, t, stderr)
 	env = append(env, "GH_TOKEN="+t.Token)
 	return runChild(real, args, env, stdin, stdout, stderr)
 }
