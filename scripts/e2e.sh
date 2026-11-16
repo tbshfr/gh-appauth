@@ -192,6 +192,21 @@ git config remote.origin.gh-resolved base
 git config --unset remote.origin.gh-resolved
 git remote remove upstream
 { grep -q "TOKEN=$TOKEN GITHUB_TOKEN=$TOKEN" <<<"$(GH_TOKEN=other "$EXT" exec -- "$WORK/realgh/gh")"; } || fail "exec sets GH_TOKEN and GITHUB_TOKEN"; pass "exec sets GH_TOKEN and GITHUB_TOKEN"
+# `gh extension upgrade` rewrites the extension binary while gh runs; that
+# fails with "text file busy" if the shim is still running as gh's parent.
+# Linux frees the binary a few ms after the exec, hence the retries.
+mkdir -p "$WORK/upgrade/realgh"
+cp "$EXT" "$WORK/upgrade/ext"
+cat > "$WORK/upgrade/realgh/gh" <<'EOF'
+#!/bin/sh
+for _ in $(seq 50); do cp "$2" "$3" 2>/dev/null && exit 0; sleep 0.1; done
+exit 1
+EOF
+chmod +x "$WORK/upgrade/realgh/gh"
+export XDG_CONFIG_HOME=$WORK/upgrade/config
+PATH="$WORK/upgrade/realgh:$PATH" "$WORK/upgrade/ext" shim "$WORK/upgrade/shim" >/dev/null
+{ "$WORK/upgrade/shim/gh" extension "$EXT" "$WORK/upgrade/ext"; } || fail "shim: extension can replace its own binary"; pass "shim: extension can replace its own binary"
+export XDG_CONFIG_HOME=$WORK/home/.config
 
 echo "== erase / invalidate"
 printf 'protocol=https\nhost=github.com\npath=acme/api-core.git\nusername=x-access-token\npassword=%s\n\n' "$TOKEN" | git credential reject

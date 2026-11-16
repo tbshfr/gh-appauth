@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/tbshfr/gh-appauth/internal/repo"
 )
@@ -38,7 +39,8 @@ func isShimScript(p string) bool {
 // findRealGH locates the real gh binary, skipping our wrapper scripts and
 // anything in exclude.
 func findRealGH(exclude string) (string, error) {
-	if p := os.Getenv("GH_PATH"); p != "" && !isShimScript(p) {
+	// A bare name would be run from the current folder: execChild does no PATH lookup.
+	if p := os.Getenv("GH_PATH"); filepath.IsAbs(p) && !isShimScript(p) {
 		return p, nil
 	}
 	if exclude != "" {
@@ -245,6 +247,16 @@ func runChild(path string, args []string, env []string, stdin io.Reader, stdout,
 	return err
 }
 
+// Replaces this process so the extension binary isn't running while the child
+// is: `gh extension upgrade` rewrites it and fails with "text file busy" otherwise.
+func execChild(path string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if runtime.GOOS == "windows" {
+		return runChild(path, args, env, stdin, stdout, stderr)
+	}
+	err := syscall.Exec(path, append([]string{path}, args...), env)
+	return &os.PathError{Op: "exec", Path: path, Err: err}
+}
+
 // shimRepo works out which repo a gh command targets, in the order gh itself
 // uses (checked against gh 2.103): a repo or PR/issue URL argument, -R,
 // GH_REPO, then the current folder's remotes.
@@ -292,7 +304,7 @@ func cmdGHShim(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	env := filteredEnv("GH_TOKEN", "GITHUB_TOKEN")
 	if !needsToken(args) {
-		return runChild(real, args, env, stdin, stdout, stderr)
+		return execChild(real, args, env, stdin, stdout, stderr)
 	}
 	cfg, err := loadConfig()
 	if err != nil {
@@ -303,7 +315,7 @@ func cmdGHShim(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	if r == "" {
-		return runChild(real, args, env, stdin, stdout, stderr)
+		return execChild(real, args, env, stdin, stdout, stderr)
 	}
 	t, _, err := getToken(cfg, r, nil)
 	if err != nil {
@@ -311,7 +323,7 @@ func cmdGHShim(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 	maybeSetIdentity(cfg, r, t, stderr)
 	env = append(env, "GH_TOKEN="+t.Token)
-	return runChild(real, args, env, stdin, stdout, stderr)
+	return execChild(real, args, env, stdin, stdout, stderr)
 }
 
 func cmdExec(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -349,5 +361,5 @@ func cmdExec(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	env := append(filteredEnv("GH_TOKEN", "GITHUB_TOKEN"), "GH_TOKEN="+t.Token, "GITHUB_TOKEN="+t.Token)
-	return runChild(path, cmd[1:], env, stdin, stdout, stderr)
+	return execChild(path, cmd[1:], env, stdin, stdout, stderr)
 }
