@@ -20,6 +20,10 @@ import (
 
 // Lets git run the test binary as the extension from hooks a test registers.
 func TestMain(m *testing.M) {
+	// The shim passes its environment on, so gh-shim must not turn into gh.
+	if os.Getenv("GH_APPAUTH_TEST_FAKEGH") != "" && (len(os.Args) < 2 || os.Args[1] != "gh-shim") {
+		os.Exit(fakeGH())
+	}
 	if os.Getenv("GH_APPAUTH_TEST_RUN") != "" {
 		if err := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 			os.Exit(1)
@@ -35,7 +39,8 @@ type fakeBroker struct {
 	tokenCalls  int
 	invalidated []string
 	fail500     bool
-	tokenStatus int // if set, /v1/token answers with this status
+	tokenStatus int    // if set, /v1/token answers with this status
+	token       string // if set, /v1/token hands out this token
 	n           int
 }
 
@@ -73,8 +78,12 @@ func newFakeBroker(t *testing.T, useTLS bool) *fakeBroker {
 				return
 			}
 			fb.n++
+			tok := fb.token
+			if tok == "" {
+				tok = "ghs_tok" + string(rune('0'+fb.n)) + "_" + strings.ReplaceAll(req.Repository, "/", "_")
+			}
 			json.NewEncoder(w).Encode(api.TokenResponse{
-				Token:     "ghs_tok" + string(rune('0'+fb.n)) + "_" + strings.ReplaceAll(req.Repository, "/", "_"),
+				Token:     tok,
 				ExpiresAt: time.Now().Add(time.Hour).UTC(), Repository: strings.ToLower(req.Repository), App: "a",
 				Permissions: map[string]string{"contents": "write"}, BotName: "a[bot]", BotEmail: "1+a[bot]@users.noreply.github.com",
 			})

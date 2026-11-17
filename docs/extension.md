@@ -19,7 +19,7 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 
 ## Environment variables
 
-`GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_CA_FILE`, `GH_APPAUTH_FINGERPRINT` and `GH_APPAUTH_INSECURE_HTTP=1` override the config file, which is useful in containers. `GH_APPAUTH_REPO` tells the `gh` shim and `exec` which repo to use when the command doesn't name one and `GH_REPO` isn't set. It takes priority over the current folder's remotes.
+`GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_CA_FILE`, `GH_APPAUTH_FINGERPRINT` and `GH_APPAUTH_INSECURE_HTTP=1` override the config file, which is useful in containers. `GH_APPAUTH_GITHUB_API` sets the GitHub API URL the shim uses to check a token (see [Local token cache](#local-token-cache)). `GH_APPAUTH_REPO` tells the `gh` shim and `exec` which repo to use when the command doesn't name one and `GH_REPO` isn't set. It takes priority over the current folder's remotes.
 
 ## Commit identity
 
@@ -62,7 +62,19 @@ In a clone of a fork, `gh pr …` therefore works on the parent in `upstream`, w
 
 Tokens are cached under `$XDG_RUNTIME_DIR/gh-appauth`, or `~/.cache/gh-appauth` if that isn't set. The directory is 0700 and the files are 0600, one per client secret, repo and permission set.
 
-A cached token is reused while it has more than 10 minutes left. If the broker is unreachable or rate limiting (429), a cached token with more than 1 minute left is used and a warning is printed. If the broker refuses (401 or 403), the cache entry is deleted and nothing falls back, so revocation takes effect right away.
+A cached token is reused while it has more than 10 minutes left. If the broker is unreachable or rate limiting (429), a cached token with more than 1 minute left is used and a warning is printed. If the broker refuses (401 or 403), the cache entry is deleted and nothing falls back, so revoking a client takes effect right away.
+
+A token can also stop working before it expires, for example when you revoke it on the dashboard, narrow a grant or replace an App. The cache can't know that, so gh-appauth notices when a command fails because of it, and drops just that token:
+
+- **gh shim, for an agent.** When neither stdout nor stderr is a terminal, the shim reads gh's output. If gh fails with GitHub's `HTTP 401: Bad credentials`, the shim checks with GitHub that the message is about this token: it could also be about another credential, or quoted in what gh printed. If GitHub refuses the token, or doesn't answer within 3 seconds, the shim drops the token locally and at the broker, gets a new one and runs the command once more. It holds the failed run's output back and discards it, so the agent sees only the second run plus one line: `gh-appauth: GitHub rejected the token for OWNER/REPO (revoked?); got a new one and ran the command again`.
+- **gh shim, at a terminal.** gh writes straight to the terminal, as without the shim. When gh fails with exit code 1, the shim asks GitHub whether it still takes the token, waiting at most 3 seconds. If GitHub refuses it, the shim drops it the same way and runs the command once more, after the error you already saw.
+- **git.** git tells the credential helper when GitHub rejects a credential, and the helper drops that token. git doesn't retry, so that command fails, and the next one gets a new token.
+
+The shim runs a command again only if gh failed within 10 seconds, since a later failure may come after the command already changed something. The second run gets the same stdin: a file is read again from where gh started, and a pipe is kept for it when the arguments tell gh to read stdin (`--body-file -`, `--input -`, `-F body=@-`). Any other pipe is left untouched for whoever reads it next, as in `... | while read n; do gh pr view "$n"; done`, so then the shim only drops the token and asks you to run the command again. The same goes for a failure after 10 seconds: the next command gets a new token.
+
+While gh runs, the shim passes SIGINT, SIGTERM and SIGHUP on to it, so a timeout that stops the shim stops gh too. On Linux gh also gets SIGTERM if the shim is killed with SIGKILL. At a terminal, Ctrl-C and a hangup already reach gh from the terminal, so the shim doesn't send them a second time, and gh's own result decides how the shim exits. When gh dies of one of these three signals, or the shim passed one on, the shim dies of it too, so a shell loop around it ends as it would for gh. Other signals that stop gh, such as SIGPIPE from `| head`, give exit code 128 plus the signal number. Signals the shim started with ignored, as under `nohup`, stay ignored.
+
+To check a token, the shim calls `https://api.github.com`, `https://api.HOST` for a GHE.com host, or `https://HOST/api/v3` for GitHub Enterprise Server. Set `GH_APPAUTH_GITHUB_API` if the API is somewhere else.
 
 ## Known gaps
 

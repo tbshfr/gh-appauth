@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -294,6 +295,34 @@ func eraseCached(repoName string) []string {
 		}
 	}
 	return out
+}
+
+// Other tokens for the repo stay: another command may be using them.
+func dropTokens(cfg *Config, tokens ...string) {
+	tokens = slices.Compact(slices.Sorted(slices.Values(tokens)))
+	tokens = slices.DeleteFunc(tokens, func(t string) bool { return t == "" })
+	if len(tokens) == 0 {
+		return
+	}
+	if d, err := cacheDir(); err == nil {
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			p := filepath.Join(d, e.Name())
+			if t := readCached(p); t != nil && slices.Contains(tokens, t.Token) {
+				os.Remove(p)
+			}
+		}
+	}
+	bc, err := newBrokerClient(cfg)
+	if err != nil {
+		return
+	}
+	for _, t := range tokens {
+		_ = bc.invalidate(t)
+	}
 }
 
 func clearCache() (int, error) {

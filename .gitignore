@@ -1,4 +1,5 @@
 /gh-appauth
+/gh-appauth.exe
 /gh-appauth-broker
 /dist/
 *.db

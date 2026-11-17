@@ -56,7 +56,7 @@ The UI can be installed as an app (a PWA) from Chrome, Edge or Safari's install 
 |---|---|---|
 | `GET /healthz` | none | `ok` |
 | `POST /v1/token` | `Bearer <secret>` | `{"repository":"owner/repo","permissions":{…}?}` → token, expiry, App, permissions, bot name and email |
-| `POST /v1/invalidate` | Bearer | `{"token":"ghs_…"}`. GitHub rejected this token, so don't serve it from cache again (sent by `git credential reject`). |
+| `POST /v1/invalidate` | Bearer | `{"token":"ghs_…"}`. GitHub rejected this token, so don't serve it from cache again (sent by `git credential reject` and the `gh` shim). A token that was already revoked stays as it is; the history records the report with the original reason. |
 | `GET /v1/whoami` | Bearer | client name, the IP the broker sees, grants |
 | `GET /v1/repos?owner=OWNER` | Bearer | `{"repos":[{"full_name","default_branch","private","archived","app"}]}`: OWNER's repos this client can get a token for, meaning its first matching grant names an App whose installation can access the repo. To list them, the broker mints a metadata-only token for each such App's whole installation and revokes it right after. That token never leaves the broker. Counts toward the token rate limit. |
 

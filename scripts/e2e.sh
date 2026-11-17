@@ -84,6 +84,7 @@ stop_broker() { kill "$BROKER_PID"; wait "$BROKER_PID" 2>/dev/null || true; }
 
 # Isolated client environment.
 export HOME=$WORK/home XDG_CONFIG_HOME=$WORK/home/.config XDG_CACHE_HOME=$WORK/home/.cache
+export GH_APPAUTH_GITHUB_API=$GHAPI
 unset XDG_RUNTIME_DIR GH_PATH GH_TOKEN GITHUB_TOKEN GH_APPAUTH_BROKER GH_APPAUTH_SECRET || true
 export GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 mkdir -p "$HOME"
@@ -213,9 +214,31 @@ printf 'protocol=https\nhost=github.com\npath=acme/api-core.git\nusername=x-acce
 NEWTOK=$("$EXT" token)
 { [[ "$NEWTOK" != "$TOKEN" ]]; } || fail "credential reject → fresh token from broker"; pass "credential reject → fresh token from broker"
 
+echo "== token revoked in the UI → gh shim retries"
+# The dashboard lists the newest token first; NEWTOK is acme/api-core's only live one.
+ID=$(curl -sS "${UI_CURL[@]}" -b "$WORK/jar" "$UI_BASE/ui/" |
+  awk '/>acme\/api-core</{f=1} f && match($0, /\/ui\/tokens\/[0-9]+\/revoke/){print substr($0, RSTART+11, RLENGTH-18); exit}')
+{ [[ -n "$ID" ]] && grep -q "Token revoked" <<<"$(ui_post "/ui/tokens/$ID/revoke")"; } || fail "revoke token in UI"; pass "revoke token in UI"
+# A gh that, like the real one, calls GitHub with GH_TOKEN.
+cat > "$WORK/realgh/gh" <<EOF
+#!/bin/sh
+code=\$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer \$GH_TOKEN" "$GHAPI/installation/repositories")
+[ "\$code" = 200 ] || { echo "HTTP \$code: Bad credentials ($GHAPI/installation/repositories)" >&2; exit 1; }
+echo "TOKEN=\$GH_TOKEN"
+EOF
+OUT=$(gh pr list </dev/null 2>"$WORK/shim.err") || fail "shim: retry after revocation ($(cat "$WORK/shim.err"))"
+RETRYTOK=$(sed -n 's/^TOKEN=//p' <<<"$OUT")
+{ [[ "$RETRYTOK" == ghs_* && "$RETRYTOK" != "$NEWTOK" ]] && ! grep -q "HTTP 401" "$WORK/shim.err" &&
+  grep -q "got a new one and ran the command again" "$WORK/shim.err"; } || fail "shim: retry after revocation"
+pass "shim: revoked token replaced, command run again"
+{ [[ "$("$EXT" token)" == "$RETRYTOK" ]]; } || fail "shim: new token cached"; pass "shim: new token cached"
+{ grep -q '"event":"invalidated".*"reason":"client reported token rejected; already revoked (revoked in admin UI)"' "$WORK/audit.log"; } ||
+  fail "audit: invalidation of an already revoked token"
+pass "audit: invalidation of an already revoked token"
+
 echo "== audit"
 { grep -q '"event":"issued"' "$WORK/audit.log" && grep -q '"event":"denied"' "$WORK/audit.log" && grep -q '"event":"invalidated"' "$WORK/audit.log" && grep -q '"event":"listed"' "$WORK/audit.log"; } || fail "audit log has issued/denied/invalidated/listed"; pass "audit log has issued/denied/invalidated/listed"
-if grep -q "$TOKEN" "$WORK/audit.log" "$WORK/broker.log" || grep -q "$SECRET" "$WORK/audit.log" "$WORK/broker.log"; then fail "token or secret leaked to logs"; fi
+if grep -qE "$TOKEN|$NEWTOK|$RETRYTOK" "$WORK/audit.log" "$WORK/broker.log" || grep -q "$SECRET" "$WORK/audit.log" "$WORK/broker.log"; then fail "token or secret leaked to logs"; fi
 pass "no tokens or secrets in logs"
 stop_broker
 

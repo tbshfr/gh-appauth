@@ -702,6 +702,30 @@ func TestRevokeToken(t *testing.T) {
 	}
 }
 
+func TestInvalidateAlreadyRevoked(t *testing.T) {
+	e := newEnv(t, nil)
+	r := e.token(secretA, "acme/api-core", nil)
+	toks, _ := e.store.ActiveTokens(e.b.now())
+	must(t, e.b.RevokeToken(toks[0].ID, "revoked in admin UI"))
+	revokes := e.gh.CallCount("DELETE /installation/token")
+	if c := e.do("POST", "/v1/invalidate", secretA, "", api.InvalidateRequest{Token: r.tok.Token}, nil).code; c != 204 {
+		t.Fatalf("invalidate: %d", c)
+	}
+	rows, _ := e.store.Requests(RequestFilter{Event: "invalidated"})
+	if len(rows) != 1 || rows[0].Client != "alice" || rows[0].Repo != "acme/api-core" ||
+		rows[0].Reason != "client reported token rejected; already revoked (revoked in admin UI)" {
+		t.Fatalf("history: %+v", rows)
+	}
+	tok, _ := e.store.TokenBySHA("alice", sha256Hex(r.tok.Token))
+	if tok.RevokedReason != "revoked in admin UI" {
+		t.Fatalf("revocation reason overwritten: %q", tok.RevokedReason)
+	}
+	time.Sleep(50 * time.Millisecond) // a stray revoke would run in the background
+	if n := e.gh.CallCount("DELETE /installation/token"); n != revokes {
+		t.Fatalf("revoked at GitHub again: %d calls", n-revokes)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	e := newEnv(t, nil)
 	r := e.do("GET", "/healthz", "", "", nil, nil)

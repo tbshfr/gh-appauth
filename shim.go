@@ -322,8 +322,8 @@ func cmdGHShim(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	}
 	maybeSetIdentity(cfg, r, t, stderr)
-	env = append(env, "GH_TOKEN="+t.Token)
-	return execChild(real, args, env, stdin, stdout, stderr)
+	// A child, not exec, so the shim sees GitHub reject the token.
+	return runWithRetry(cfg, r, t.Token, real, args, env, stdin, stdout, stderr)
 }
 
 func cmdExec(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
