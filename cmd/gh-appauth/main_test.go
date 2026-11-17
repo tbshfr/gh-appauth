@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -830,7 +831,25 @@ func TestHookCommandToleratesMissingBinary(t *testing.T) {
 	}
 }
 
+// requireConfigHooks skips t on git versions that ignore hooks defined in
+// git config. They arrived in git 2.54.
+func requireConfigHooks(t *testing.T) {
+	t.Helper()
+	out, err := gitOut("version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor); err != nil {
+		t.Fatalf("can't read the git version from %q: %v", out, err)
+	}
+	if major < 2 || major == 2 && minor < 54 {
+		t.Skipf("%s ignores hooks defined in git config, which need git 2.54 or later", strings.TrimSpace(out))
+	}
+}
+
 func TestCoAuthorTrailer(t *testing.T) {
+	requireConfigHooks(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
