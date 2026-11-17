@@ -8,7 +8,6 @@ function el(tag, props, ...children) {
 
 function ask(msg, label) {
   if (!window.HTMLDialogElement) return Promise.resolve(confirm(msg));
-  // "Delete client x? Its tokens are revoked." becomes a title and a body.
   const cut = msg.indexOf("? ");
   const title = cut < 0 ? msg : msg.slice(0, cut + 1);
   const cancel = el("button", { type: "button", textContent: "Cancel", value: "cancel" });
@@ -86,6 +85,60 @@ document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
     applyTheme(root.dataset.theme === "dark" ? "light" : "dark");
     try { localStorage.setItem("theme", root.dataset.theme); } catch {}
   });
+});
+
+function shellQuote(s) {
+  return /^[\w@%+=:,./~-]+$/.test(s) ? s : "'" + s.replace(/'/g, `'\\''`) + "'";
+}
+
+function isLoopback(host) {
+  host = host.replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host);
+}
+
+document.querySelectorAll("[data-setup]").forEach((box) => {
+  const opts = box.querySelector(".setup-opts"), pre = box.querySelector("pre");
+  const inputs = [...opts.querySelectorAll("input[name]")];
+  const field = (name) => inputs.find((i) => i.name === name);
+  const { defaultBroker, fingerprint, comment } = box.dataset;
+  const key = "setup-opts";
+  try {
+    const saved = JSON.parse(localStorage.getItem(key)) || {};
+    for (const i of inputs) {
+      if (!(i.name in saved)) continue;
+      if (i.type === "checkbox") i.checked = !!saved[i.name];
+      else i.value = saved[i.name];
+    }
+  } catch {}
+  const adv = opts.querySelector("details");
+  if (field("host").value || field("ca-file").value) adv.open = true;
+
+  const render = () => {
+    const broker = field("broker").value.trim() || defaultBroker;
+    const flags = [];
+    let insecure = false;
+    try {
+      const u = new URL(broker);
+      insecure = u.protocol === "http:" && !isLoopback(u.hostname);
+    } catch {}
+    if (fingerprint && field("fingerprint")?.checked) flags.push("--fingerprint " + fingerprint);
+    if (insecure) flags.push("--insecure-http");
+    for (const name of ["host", "ca-file"]) {
+      const v = field(name).value.trim();
+      if (v) flags.push(`--${name} ${shellQuote(v)}`);
+    }
+    if (field("no-cache").checked) flags.push("--no-cache");
+    pre.textContent = ["gh appauth setup --broker " + shellQuote(broker), ...flags].join(" \\\n  ") + (comment ? "\n" + comment : "");
+  };
+
+  opts.addEventListener("input", () => {
+    render();
+    const state = {};
+    for (const i of inputs) state[i.name] = i.type === "checkbox" ? i.checked : i.value;
+    try { localStorage.setItem(key, JSON.stringify(state)); } catch {}
+  });
+  opts.hidden = false;
+  render();
 });
 
 if ("serviceWorker" in navigator) {

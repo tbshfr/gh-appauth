@@ -63,25 +63,48 @@ If you want to tie the client to the machine it runs on, fill in its allowed sou
 
 ## 4. Agent machine
 
-```bash
-gh extension install tbshfr/gh-appauth           # or: go build -o gh-appauth ./cmd/gh-appauth && gh extension install .
-gh appauth setup --broker https://broker.lan:8443 --fingerprint AB:CD:…   # paste the secret
-gh appauth git-setup                              # git uses the broker for https://github.com
-gh appauth shim ~/.local/gh-appauth-bin           # optional: plain `gh` uses App tokens
-echo 'export PATH="$HOME/.local/gh-appauth-bin:$PATH"' >> ~/.bashrc   # see below
-gh appauth status
-```
+Run these as the OS user the agent runs as.
 
-The shim only takes effect where its folder comes before the real `gh` in `PATH`. Exporting `PATH` in your current shell lasts until that shell exits, so put it in the agent user's shell profile (`~/.bashrc`, `~/.zshrc`, or the environment of the service that starts the agent), then open a new shell. `type -a gh` should list the shim's folder first.
+1. Install the extension:
 
-`setup` reads the secret from stdin, checks it against the broker, and prints the grants it found. If the broker's certificate isn't trusted yet, `setup` prints its fingerprint so you can compare it with the one from step 1.
+   ```bash
+   gh extension install tbshfr/gh-appauth   # or: go build -o gh-appauth ./cmd/gh-appauth && gh extension install .
+   ```
 
-After this, `git clone/fetch/push https://github.com/acme/api-core` and `gh pr create` work unchanged. Commits show up as the App's bot in repos that don't set their own `user.name` and `user.email`. See [Commit identity](extension.md#commit-identity) for when that's set and how to turn it off.
+2. Connect it to the broker. Right after you create a client or click Generate secret, the client's page shows the secret with the `setup` command above it. If you've left the page since, generate a new secret to get both again.
 
-The agent's OS user must have no `gh auth login` session. Then any `gh` call the shim can't tie to a repo fails, instead of quietly using your personal account.
+   Above the command you can change the broker URL to the one this machine uses, turn off the [local token cache](extension.md#without-the-local-cache), and under Advanced set a GitHub Enterprise Server host or a CA file. The UI adds `--fingerprint` and `--insecure-http` when the broker's TLS mode and URL need them. Written by hand, the command looks like this:
 
-Remotes must use HTTPS. SSH remotes never call the credential helper, and `git-setup` warns when it finds one. See [Known gaps](extension.md#known-gaps) for the other cases that need a workaround, including Windows.
+   ```bash
+   gh appauth setup --broker https://broker.lan:8443 --fingerprint AB:CD:…
+   ```
 
-To update the extension later, run `gh extension install --force tbshfr/gh-appauth`. `gh extension upgrade appauth` doesn't work here: the agent user has no `gh auth login` session, and `upgrade` (unlike `install`) refuses to run without one, with "To get started with GitHub CLI, please run: gh auth login". When the extension is already installed, `install --force` upgrades it.
+   Paste the secret when it asks. It reads the secret from stdin, so you can also pipe it in. `setup` checks the secret with the broker and prints the client's grants. If the broker's certificate isn't trusted yet, it prints the fingerprint so you can compare it with the one from step 1.
+
+3. Point git at the broker for `https://github.com`:
+
+   ```bash
+   gh appauth git-setup
+   ```
+
+   Remotes must use HTTPS, because SSH remotes never call the credential helper. `git-setup` warns when it finds one.
+
+4. Optionally, make plain `gh` use App tokens:
+
+   ```bash
+   gh appauth shim ~/.local/gh-appauth-bin
+   echo 'export PATH="$HOME/.local/gh-appauth-bin:$PATH"' >> ~/.bashrc   # zsh: ~/.zshrc
+   source ~/.bashrc                                                    # zsh: source ~/.zshrc
+   ```
+
+   `type -a gh` should list the shim's folder first. If a service starts the agent, add the folder to the front of `PATH` in that service's environment instead.
+
+   The agent's OS user must have no `gh auth login` session. Then a `gh` call the shim can't tie to a repo fails instead of quietly using your personal account.
+
+5. Check the result with `gh appauth status`.
+
+From then on, `git clone`, `fetch` and `push` over HTTPS and `gh pr create` work unchanged. Commits show up as the App's bot in repos that don't set their own `user.name` and `user.email`; [Commit identity](extension.md#commit-identity) explains when that happens and how to turn it off. [Known gaps](extension.md#known-gaps) lists the cases that need a workaround, including Windows.
+
+To update the extension, run `gh extension install --force tbshfr/gh-appauth`, which upgrades an installed extension. `gh extension upgrade appauth` won't work, because it refuses to run without a `gh auth login` session and stops with "To get started with GitHub CLI, please run: gh auth login".
 
 In containers you can skip the config file and set `GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET` and the trust settings as [environment variables](extension.md#environment-variables).

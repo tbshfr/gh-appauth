@@ -21,18 +21,13 @@
   <header class="card-head">
     <div>
       <h2>New client secret</h2>
-      <p>Copy it now. The broker keeps only its hash, so you can't view it again.</p>
+      <p>Run the setup command on the client machine, then paste the secret when it asks. Copy the secret now: the broker keeps only its hash, so you can't view it again.</p>
     </div>
   </header>
   <div class="card-body">
+    {{template "setupcmd" .Info}}
+    <p class="label">Client secret</p>
     <div class="copyrow big"><code id="secret">{{.Data.NewSecret}}</code><button class="primary" data-copy="secret">Copy</button></div>
-    <p class="label">On the client machine</p>
-    <div class="codeblock">
-      <pre id="setup">gh appauth setup --broker {{.Info.SetupURL}}{{if eq .Info.TLSMode "self"}} \
-  --fingerprint {{.Info.TLSFingerprint}}{{end}}{{if eq .Info.TLSMode "off"}} --insecure-http{{end}}
-# paste the secret when prompted</pre>
-      <button class="small" data-copy="setup">Copy</button>
-    </div>
   </div>
 </section>
 {{end}}
@@ -194,6 +189,33 @@
     </div>
     <label class="field"><span class="label">Other permissions</span>
       <input name="perm_other" class="mono" value="{{extraPerms $p}}" placeholder="administration=read, environments=write"></label>
+  </div>
+</div>
+{{end}}
+
+{{define "setupcmd"}}{{$i := .}}
+<div class="setup" data-setup data-default-broker="{{$i.SetupURL}}" data-fingerprint="{{if eq $i.TLSMode "self"}}{{$i.TLSFingerprint}}{{end}}" data-comment="# paste the secret when prompted">
+  <div class="setup-opts" hidden>
+    <label class="field"><span class="label">Broker URL <span class="hint">as the client machine reaches it</span></span>
+      <input name="broker" class="mono" value="{{$i.SetupURL}}" placeholder="{{$i.SetupURL}}" spellcheck="false" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" name="no-cache"> <span>No local token cache <span class="hint">Every git or gh command asks the broker, so each one shows up in its history.</span></span></label>
+    {{if eq $i.TLSMode "self"}}<label class="check"><input type="checkbox" name="fingerprint" checked> <span>Pin the certificate fingerprint <span class="hint">Turn off if clients reach the broker through a proxy with its own certificate.</span></span></label>{{end}}
+    <details class="disclosure">
+      <summary>Advanced</summary>
+      <div class="form-grid">
+        <label class="field"><span class="label">GitHub host <span class="hint">GitHub Enterprise Server only</span></span>
+          <input name="host" class="mono" placeholder="github.com" spellcheck="false" autocomplete="off"></label>
+        <label class="field"><span class="label">CA file <span class="hint">PEM path on the client, for a private CA</span></span>
+          <input name="ca-file" class="mono" placeholder="/etc/ssl/broker-ca.pem" spellcheck="false" autocomplete="off"></label>
+      </div>
+    </details>
+  </div>
+  <div class="codeblock">
+    <pre id="setup">gh appauth setup --broker {{$i.SetupURL}}{{if eq $i.TLSMode "self"}} \
+  --fingerprint {{$i.TLSFingerprint}}{{end}}{{if insecureHTTP $i.SetupURL}} \
+  --insecure-http{{end}}
+# paste the secret when prompted</pre>
+    <button class="small" data-copy="setup">Copy</button>
   </div>
 </div>
 {{end}}

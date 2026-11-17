@@ -37,22 +37,6 @@
 </section>
 
 <section class="card">
-  <header class="card-head">
-    <div>
-      <h2>Client setup</h2>
-      <p>Run this on a client machine, then paste its secret when prompted.</p>
-    </div>
-  </header>
-  <div class="card-body">
-    <div class="codeblock">
-      <pre id="setup">gh appauth setup --broker {{.Info.SetupURL}}{{if eq .Info.TLSMode "self"}} \
-  --fingerprint {{.Info.TLSFingerprint}}{{end}}{{if eq .Info.TLSMode "off"}} --insecure-http{{end}}</pre>
-      <button class="small" data-copy="setup">Copy</button>
-    </div>
-  </div>
-</section>
-
-<section class="card">
   <header class="card-head"><h2>Change admin password</h2></header>
   <div class="card-body">
     <form method="post" action="/ui/settings/password" class="form narrow">

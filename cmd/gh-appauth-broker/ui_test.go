@@ -422,3 +422,40 @@ func TestUIDatabaseSize(t *testing.T) {
 		t.Errorf("settings page lacks %q", want)
 	}
 }
+
+func TestUISetupCommand(t *testing.T) {
+	for _, tc := range []struct {
+		mode, url, want, noFP string
+	}{
+		{"self", "https://b.lan:8443", "gh appauth setup --broker https://b.lan:8443 \\\n  --fingerprint AB:CD", ""},
+		{"off", "http://b.lan:8443", "gh appauth setup --broker http://b.lan:8443 \\\n  --insecure-http", `name="fingerprint"`},
+		// The client accepts plain http to its own machine without the flag.
+		{"off", "http://127.0.0.1:8443", "gh appauth setup --broker http://127.0.0.1:8443", `name="fingerprint"`},
+		{"files", "https://b.lan:8443", "gh appauth setup --broker https://b.lan:8443", `name="fingerprint"`},
+	} {
+		e := newEnv(t, func(o *Options) {
+			o.Info.TLSMode, o.Info.TLSFingerprint, o.Info.SetupURL = tc.mode, "AB:CD", tc.url
+		})
+		u := newUIClient(t, e)
+		u.get("/ui/login")
+		u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+		u.get("/ui/clients")
+		_, _, body := u.post("/ui/clients", url.Values{"name": {"carol"}})
+		if want := tc.want + "\n# paste the secret when prompted</pre>"; !strings.Contains(body, want) {
+			t.Errorf("%s %s: new-secret card lacks %q", tc.mode, tc.url, want)
+		}
+		if !strings.Contains(body, `name="no-cache"`) {
+			t.Errorf("%s: new-secret card lacks the no-cache option", tc.mode)
+		}
+		if tc.noFP != "" && strings.Contains(body, tc.noFP) {
+			t.Errorf("%s: new-secret card offers fingerprint pinning without a self-signed cert", tc.mode)
+		}
+		// Read top to bottom: run the command, then paste the secret.
+		if c, s := strings.Index(body, `id="setup"`), strings.Index(body, `id="secret"`); c < 0 || s < c {
+			t.Errorf("%s: setup command not above the secret", tc.mode)
+		}
+		if _, again := u.get("/ui/clients/carol"); strings.Contains(again, `id="setup"`) {
+			t.Errorf("%s: setup command shown without a new secret", tc.mode)
+		}
+	}
+}

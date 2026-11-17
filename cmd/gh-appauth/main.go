@@ -32,7 +32,7 @@ const usage = `gh appauth: GitHub App tokens for git and gh, from a gh-appauth b
 
 Usage:
   gh appauth setup --broker URL [--fingerprint SHA256] [--ca-file F] [--insecure-http]
-                   [--no-cache]
+                   [--host H] [--no-cache]
                                     save broker settings (secret read from stdin)
   gh appauth status                 show broker, client, grants and current repo
   gh appauth token [OWNER/REPO] [--perm k=v]... [--json]

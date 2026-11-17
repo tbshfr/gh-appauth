@@ -40,10 +40,10 @@ Clients never turn verification off. With `--fingerprint`, the certificate has t
 | Page | What's there |
 |---|---|
 | Dashboard | Counts for the last 24 hours, active tokens (client, repo, App, permissions, expiry, reuse count, Revoke button), recent requests. |
-| Clients | Create, disable or delete clients, IP allowlists, secrets (generate, rotate, remove), grants (ordered; first match wins), per-client tokens and history. |
+| Clients | Create, disable or delete clients, IP allowlists, secrets (generate, rotate, remove) with the setup command for the client machine, grants (ordered; first match wins), per-client tokens and history. |
 | Apps | Add or replace Apps (paste or upload a `.pem`), test them against GitHub, delete Apps that no grant uses. |
 | History | Every token request, repo listing, denial, error, revocation and invalidation, filterable by client, event and repo. |
-| Settings | Server settings (read-only), TLS fingerprint, the client setup command, password change. |
+| Settings | Server settings (read-only), TLS fingerprint, password change. |
 
 The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. The session cookie is `Secure` when the broker serves TLS, or when a trusted proxy (`-trusted-proxies`) sends `X-Forwarded-Proto: https`. Failed logins are limited per source address (per /64 for IPv6), separately from API authentication failures.
 

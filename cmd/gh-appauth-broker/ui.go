@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -92,11 +93,12 @@ func newUI(b *Broker) *ui {
 			}
 			return strings.ReplaceAll(permString(extra), ",", ", ")
 		},
-		"permList":    permList,
-		"permSummary": permSummary,
-		"uid":         func() string { return "u" + strconv.FormatUint(idSeq.Add(1), 36) },
-		"common":      func() []string { return commonPerms },
-		"noperms":     func() map[string]string { return map[string]string{} },
+		"permList":     permList,
+		"insecureHTTP": needsInsecureHTTP,
+		"permSummary":  permSummary,
+		"uid":          func() string { return "u" + strconv.FormatUint(idSeq.Add(1), 36) },
+		"common":       func() []string { return commonPerms },
+		"noperms":      func() map[string]string { return map[string]string{} },
 		"dict": func(kv ...any) map[string]any {
 			m := map[string]any{}
 			for i := 0; i+1 < len(kv); i += 2 {
@@ -893,4 +895,19 @@ func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s *session) 
 func (u *ui) reload(w http.ResponseWriter, r *http.Request, s *session) {
 	err := u.b.Reload()
 	back(w, r, "/ui/settings", "Configuration reloaded from the database.", err)
+}
+
+// needsInsecureHTTP mirrors the client's rule: plain http:// is accepted
+// without --insecure-http only when the broker is on the client's own machine.
+func needsInsecureHTTP(broker string) bool {
+	u, err := url.Parse(broker)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return false
+	}
+	ip, err := netip.ParseAddr(h)
+	return err != nil || !ip.IsLoopback()
 }
