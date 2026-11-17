@@ -129,6 +129,21 @@ func OpenStore(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// DiskUsage reports the databases size on disk, including the -wal and -shm files
+func (s *Store) DiskUsage() (total, wal int64) {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		fi, err := os.Stat(s.path + suffix)
+		if err != nil {
+			continue
+		}
+		total += fi.Size()
+		if suffix != "" {
+			wal += fi.Size()
+		}
+	}
+	return total, wal
+}
+
 func (s *Store) GetSetting(key string) (string, error) {
 	var v string
 	err := s.db.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v)

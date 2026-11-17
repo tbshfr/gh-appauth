@@ -80,6 +80,7 @@ func newUI(b *Broker) *ui {
 		"perms":  permString,
 		"spaced": func(s string) string { return strings.ReplaceAll(s, ",", ", ") },
 		"join":   strings.Join,
+		"bytes":  humanBytes,
 		"lines":  func(s []string) string { return strings.Join(s, "\n") },
 		"permIs": func(m map[string]string, k, v string) bool { return m[k] == v },
 		"extraPerms": func(m map[string]string) string {
@@ -121,6 +122,18 @@ func newUI(b *Broker) *ui {
 		u.pages[base] = template.Must(template.New("layout.html").Funcs(funcs).ParseFS(uiFS, "ui/templates/layout.html", n))
 	}
 	return u
+}
+
+func humanBytes(n int64) string {
+	if n < 1024 {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+	f, unit := float64(n)/1024, 0
+	for f >= 1024 && unit < 3 {
+		f /= 1024
+		unit++
+	}
+	return strconv.FormatFloat(f, 'f', 1, 64) + " " + [...]string{"KiB", "MiB", "GiB", "TiB"}[unit]
 }
 
 type permEntry struct{ Name, Level string }
@@ -843,7 +856,8 @@ func (u *ui) moveGrant(w http.ResponseWriter, r *http.Request, s *session) {
 // ---- settings ----
 
 func (u *ui) settings(w http.ResponseWriter, r *http.Request, s *session) {
-	u.render(w, r, s, "settings", "settings", "Settings", nil)
+	total, wal := u.b.store.DiskUsage()
+	u.render(w, r, s, "settings", "settings", "Settings", struct{ DBSize, WALSize int64 }{total, wal})
 }
 
 func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s *session) {

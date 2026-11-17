@@ -399,3 +399,26 @@ func TestUINotOnAPIWhenSeparate(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestHumanBytes(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 1024: "1.0 KiB", 1536: "1.5 KiB", 5 << 20: "5.0 MiB", 3 << 30: "3.0 GiB"} {
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestUIDatabaseSize(t *testing.T) {
+	e := newEnv(t, nil)
+	u := newUIClient(t, e)
+	u.get("/ui/login")
+	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	_, body := u.get("/ui/settings")
+	total, wal := e.store.DiskUsage()
+	if total == 0 || wal == 0 {
+		t.Fatalf("DiskUsage() = %d, %d; want both non-zero for a WAL database in use", total, wal)
+	}
+	if want := "<dt>Database size</dt><dd>" + humanBytes(total) + " on disk"; !strings.Contains(body, want) {
+		t.Errorf("settings page lacks %q", want)
+	}
+}

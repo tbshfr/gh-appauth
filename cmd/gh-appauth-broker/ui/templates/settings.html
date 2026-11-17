@@ -25,6 +25,7 @@
     <dt>Trusted proxies</dt><dd class="mono">{{if .Info.TrustedProxies}}{{join .Info.TrustedProxies ", "}}{{else}}<span class="muted">none (X-Forwarded-For ignored)</span>{{end}}</dd>
     <dt>Token rate limit</dt><dd>{{.Info.TokensPerMinute}} token requests and repo listings per minute per client</dd>
     <dt>Database</dt><dd class="mono">{{.Info.DBPath}}</dd>
+    <dt>Database size</dt><dd>{{bytes .Data.DBSize}} on disk{{if .Data.WALSize}} <span class="muted">(including {{bytes .Data.WALSize}} of WAL and shared-memory files)</span>{{end}}</dd>
   </dl>
   <footer class="card-foot">
     <p>Changed the database directly? Reload to pick up clients, grants and apps without a restart.</p>
