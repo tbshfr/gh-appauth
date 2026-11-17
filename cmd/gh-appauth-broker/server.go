@@ -32,6 +32,8 @@ const (
 	// answer to a request that did mint a token.
 	githubBudget  = 45 * time.Second
 	identityRetry = 5 * time.Minute
+
+	defaultTokensPerMinute = 60
 )
 
 type Options struct {
@@ -51,15 +53,16 @@ type Options struct {
 }
 
 type ServerInfo struct {
-	Version        string
-	DBPath         string
-	Listen         string
-	UIListen       string
-	TLSMode        string
-	TLSFingerprint string
-	TLSHosts       []string
-	TrustedProxies []string
-	SetupURL       string // suggested --broker URL for client setup
+	Version         string
+	DBPath          string
+	Listen          string
+	UIListen        string
+	TLSMode         string
+	TLSFingerprint  string
+	TLSHosts        []string
+	TrustedProxies  []string
+	SetupURL        string // suggested --broker URL for client setup
+	TokensPerMinute int
 }
 
 func (i ServerInfo) ReleaseURL() string { return buildinfo.ReleaseURL(i.Version) }
@@ -113,9 +116,10 @@ func NewBroker(store *Store, opts Options) (*Broker, error) {
 	if opts.Log == nil {
 		opts.Log = os.Stdout
 	}
-	if opts.TokensPerMinute == 0 {
-		opts.TokensPerMinute = 60
+	if opts.TokensPerMinute <= 0 {
+		opts.TokensPerMinute = defaultTokensPerMinute
 	}
+	opts.Info.TokensPerMinute = opts.TokensPerMinute
 	if opts.FailsPerMinute == 0 {
 		opts.FailsPerMinute = 20
 	}

@@ -23,6 +23,7 @@
     {{end}}
     {{if .Info.TLSHosts}}<dt>Certificate names</dt><dd class="mono">{{join .Info.TLSHosts ", "}}</dd>{{end}}
     <dt>Trusted proxies</dt><dd class="mono">{{if .Info.TrustedProxies}}{{join .Info.TrustedProxies ", "}}{{else}}<span class="muted">none (X-Forwarded-For ignored)</span>{{end}}</dd>
+    <dt>Token rate limit</dt><dd>{{.Info.TokensPerMinute}} token requests and repo listings per minute per client</dd>
     <dt>Database</dt><dd class="mono">{{.Info.DBPath}}</dd>
   </dl>
   <footer class="card-foot">

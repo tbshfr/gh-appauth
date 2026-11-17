@@ -112,16 +112,17 @@ func defaultDataDir() (string, error) {
 }
 
 type serveConfig struct {
-	DB             string
-	Listen         string
-	UIListen       string
-	TLSMode        string
-	TLSCert        string
-	TLSKey         string
-	TLSHosts       string
-	TrustedProxies string
-	GitHubAPI      string
-	HistoryDays    int
+	DB              string
+	Listen          string
+	UIListen        string
+	TLSMode         string
+	TLSCert         string
+	TLSKey          string
+	TLSHosts        string
+	TrustedProxies  string
+	GitHubAPI       string
+	HistoryDays     int
+	TokensPerMinute int
 }
 
 func cmdServe(args []string) error {
@@ -137,7 +138,11 @@ func cmdServe(args []string) error {
 	fs.StringVar(&c.TrustedProxies, "trusted-proxies", "", "comma-separated `CIDRs` of reverse proxies whose X-Forwarded-For is trusted")
 	fs.StringVar(&c.GitHubAPI, "github-api", "https://api.github.com", "GitHub API base `URL`")
 	fs.IntVar(&c.HistoryDays, "history-days", 30, "keep request history for this many `days`")
+	fs.IntVar(&c.TokensPerMinute, "tokens-per-minute", defaultTokensPerMinute, "allow each client `N` token requests and repo listings per minute")
 	fs.Parse(args)
+	if c.TokensPerMinute < 1 {
+		return fmt.Errorf("-tokens-per-minute must be at least 1 (got %d)", c.TokensPerMinute)
+	}
 	var err error
 	if c.DB, err = db(); err != nil {
 		return err
@@ -270,7 +275,7 @@ func serve(c serveConfig, ready chan<- string) error {
 	}
 	b, err := NewBroker(st, Options{
 		GitHubAPI: c.GitHubAPI, TrustedProxies: trusted, HistoryDays: c.HistoryDays,
-		SecureCookies: certs != nil, Info: info,
+		TokensPerMinute: c.TokensPerMinute, SecureCookies: certs != nil, Info: info,
 	})
 	if err != nil {
 		return fmt.Errorf("invalid configuration in %s: %w", c.DB, err)
