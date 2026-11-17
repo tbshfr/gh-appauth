@@ -4,27 +4,36 @@ Setup has four parts: the broker host, a GitHub App, the admin UI, and each agen
 
 ## 1. Broker host
 
+On a Linux host with systemd, install the latest release and start it:
+
 ```bash
-go build -o gh-appauth-broker ./cmd/gh-appauth-broker   # or use a release binary
-sudo install -m 0755 gh-appauth-broker /usr/local/bin/
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+URL=https://github.com/tbshfr/gh-appauth/releases/latest/download
+curl -fsSLO "$URL/gh-appauth-broker_linux_$ARCH" -O "$URL/checksums.txt"
+sha256sum -c --ignore-missing checksums.txt
+sudo install -m 0755 "gh-appauth-broker_linux_$ARCH" /usr/local/bin/gh-appauth-broker
+sudo curl -fsSLo /etc/systemd/system/gh-appauth-broker.service "$URL/gh-appauth-broker.service"
 sudo gh-appauth-broker set-password -data-dir /var/lib/gh-appauth-broker
-sudo cp deploy/gh-appauth-broker.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now gh-appauth-broker
-journalctl -u gh-appauth-broker | grep fingerprint     # note the TLS fingerprint
 ```
 
-By default the broker keeps its database in a `data/` directory next to its binary (created with mode 0700). Use `-data-dir DIR` or `GH_APPAUTH_BROKER_DATA_DIR` to put it somewhere else.
+To build from source instead, run `go build ./cmd/gh-appauth-broker` and use the unit in `deploy/`. To update later, download and install the binary again and run `sudo systemctl restart gh-appauth-broker`.
 
-The example unit runs under `DynamicUser=`, which can't write next to the binary, so it uses `-data-dir /var/lib/gh-appauth-broker` (its `StateDirectory=`). On first start systemd moves that directory to `/var/lib/private/` and gives it to the dynamic user, which is why `set-password` runs before the service is enabled. You can change the password later on the Settings page.
+`set-password` runs before the service starts because on first start systemd moves `/var/lib/gh-appauth-broker` to `/var/lib/private/` and hands it to the service's dynamic user. You can change the password later on the Settings page.
 
-Keep the clock in sync with chrony or systemd-timesyncd. GitHub rejects App JWTs from a clock that's more than about a minute off.
+Agent machines connect to the broker on port 8443, so let them through the host's firewall.
 
-By default the broker serves TLS with a self-signed certificate and clients pin its fingerprint. To use your own certificate or put the broker behind a reverse proxy, see [TLS modes](broker.md#tls-modes) and [Running behind a reverse proxy](operations.md#running-behind-a-reverse-proxy).
+The unit's `ExecStart` line sets the broker's flags, and the comments below it list the others you can add. You'll most likely want `-tls-hosts`, which adds the names and IPs clients use to the self-signed certificate (otherwise it only covers localhost and the hostname). Change them with `sudo systemctl edit --full gh-appauth-broker`, then run `sudo systemctl restart gh-appauth-broker`.
+
+The broker serves TLS with a self-signed certificate, and clients pin its fingerprint. To use your own certificate or a reverse proxy, see [TLS modes](broker.md#tls-modes) and [Running behind a reverse proxy](operations.md#running-behind-a-reverse-proxy).
+
+Keep the host's clock in sync. GitHub rejects App JWTs from a clock that's more than about a minute off.
 
 ## 2. Create a GitHub App
 
 In GitHub, go to Settings → Developer settings → GitHub Apps → New GitHub App:
 
+- GitHub requires a Homepage URL. Any URL works, for example `https://github.com/tbshfr/gh-appauth`.
 - Turn off the webhook.
 - Under repository permissions, pick what your agents need.
 - Install the App on selected repositories.
@@ -53,17 +62,17 @@ You can create more than one App, for example one per group of repos, and add th
 
 The example unit serves the admin UI on its own port, bound to loopback (`-ui-listen 127.0.0.1:8444`), so agents that can reach the API port can't reach the login page. If the broker runs on another machine, either reach the UI through an SSH tunnel, or change that flag to `-ui-listen 0.0.0.0:8444` in the unit and firewall the port so only your workstation can reach it.
 
-Open `https://BROKER:8444/ui/` (or `https://localhost:8444/ui/` on the broker host) and sign in. With a self-signed certificate the browser shows a warning; you can check the fingerprint against the one from step 1. Then:
+Open `https://BROKER:8444/ui/` (or `https://localhost:8444/ui/` on the broker host) and sign in. With a self-signed certificate the browser shows a warning. To check it, compare the fingerprint the browser shows with the output of `sudo gh-appauth-broker fingerprint -data-dir /var/lib/gh-appauth-broker` on the broker host. Then:
 
 1. On the Apps page, add the App with a name, its App ID and the `.pem` file. Click Test to confirm GitHub accepts the key.
-2. On the Clients page, create one client per agent or machine. The secret is shown only once, so copy it now.
+2. On the Clients page, create one client per agent or machine. The client's page then shows its secret, with the setup command for [section 4](#4-agent-machine) above it. Above the command you can change the broker URL to the one the agent machine uses, turn off the [local token cache](extension.md#without-the-local-cache), and under Advanced set a GitHub Enterprise Server host or a CA file. The command and secret disappear when the page reloads, for example after you add a grant, so copy them now. If you lose them, generate a new secret.
 3. On the client's page, add grants. Each grant has one or more repo globs (`acme/api-*`), an App, and optional maximum permissions. If you set no permissions, tokens get everything the App installation has. Grants are checked in order and the first one whose pattern matches wins.
 
 If you want to tie the client to the machine it runs on, fill in its allowed source IPs or CIDRs in the client's settings.
 
 ## 4. Agent machine
 
-Run these as the OS user the agent runs as.
+Run these as the OS user the agent runs as. That user needs the [GitHub CLI](https://cli.github.com) installed, and must not have a `gh auth login` session; otherwise a `gh` call that gh-appauth can't tie to a repo quietly uses your personal account.
 
 1. Install the extension:
 
@@ -71,15 +80,13 @@ Run these as the OS user the agent runs as.
    gh extension install tbshfr/gh-appauth   # or: go build -o gh-appauth ./cmd/gh-appauth && gh extension install .
    ```
 
-2. Connect it to the broker. Right after you create a client or click Generate secret, the client's page shows the secret with the `setup` command above it. If you've left the page since, generate a new secret to get both again.
-
-   Above the command you can change the broker URL to the one this machine uses, turn off the [local token cache](extension.md#without-the-local-cache), and under Advanced set a GitHub Enterprise Server host or a CA file. The UI adds `--fingerprint` and `--insecure-http` when the broker's TLS mode and URL need them. Written by hand, the command looks like this:
+2. Run the `setup` command you copied in [section 3](#3-admin-ui) and paste the secret when it asks. Written by hand, it looks like this:
 
    ```bash
    gh appauth setup --broker https://broker.lan:8443 --fingerprint AB:CD:…
    ```
 
-   Paste the secret when it asks. It reads the secret from stdin, so you can also pipe it in. `setup` checks the secret with the broker and prints the client's grants. If the broker's certificate isn't trusted yet, it prints the fingerprint so you can compare it with the one from step 1.
+   `setup` reads the secret from stdin, so you can also pipe it in. It checks the secret with the broker and prints the client's grants. If the broker's certificate isn't trusted, it prints the certificate's fingerprint so you can compare it with the one on the admin UI's Settings page.
 
 3. Point git at the broker for `https://github.com`:
 
@@ -99,11 +106,9 @@ Run these as the OS user the agent runs as.
 
    `type -a gh` should list the shim's folder first. If a service starts the agent, add the folder to the front of `PATH` in that service's environment instead.
 
-   The agent's OS user must have no `gh auth login` session. Then a `gh` call the shim can't tie to a repo fails instead of quietly using your personal account.
-
 5. Check the result with `gh appauth status`.
 
-From then on, `git clone`, `fetch` and `push` over HTTPS and `gh pr create` work unchanged. Commits show up as the App's bot in repos that don't set their own `user.name` and `user.email`; [Commit identity](extension.md#commit-identity) explains when that happens and how to turn it off. [Known gaps](extension.md#known-gaps) lists the cases that need a workaround, including Windows.
+From then on, `git clone`, `fetch` and `push` over HTTPS and `gh pr create` work unchanged. [Commit identity](extension.md#commit-identity) explains when commits show up as the App's bot and how to turn that off. [Known gaps](extension.md#known-gaps) lists the cases that need a workaround, including Windows.
 
 To update the extension, run `gh extension install --force tbshfr/gh-appauth`, which upgrades an installed extension. `gh extension upgrade appauth` won't work, because it refuses to run without a `gh auth login` session and stops with "To get started with GitHub CLI, please run: gh auth login".
 
