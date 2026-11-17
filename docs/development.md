@@ -5,6 +5,8 @@ go vet ./... && gofmt -l . && go test -race ./...
 scripts/e2e.sh        # builds everything; fake GitHub; TLS files/self/off; real git + gh shim
 ```
 
+To work on the admin UI, `scripts/dev.sh` runs the broker against the fake GitHub with seeded apps, clients, grants, tokens and denied requests, at http://127.0.0.1:8443/ui/ (password `dev-admin-password`). It rebuilds on every run and keeps its state in `.dev/`; `--reset` seeds it again from scratch, and `PORT` picks another port.
+
 `scripts/e2e.sh` runs offline. It builds both binaries, starts a fake GitHub API that checks App JWT signatures, configures the broker through the admin UI, and drives real `git` and the `gh` shim against it in all three TLS modes. Set `KEEP=1` to keep its work directory afterwards.
 
 The broker's only third-party dependency is `modernc.org/sqlite`, a pure-Go SQLite with no cgo, so cross-compiling stays easy. The extension uses the standard library only.
@@ -35,6 +37,7 @@ cmd/gh-appauth-broker/
   tlsconf.go         TLS modes, self-signed certificate
   ui.go, ui/         admin UI (embedded templates and assets)
 deploy/              systemd unit, Caddyfile
+scripts/dev.sh       broker with seeded data for UI work
 scripts/e2e.sh       end-to-end test
 scripts/release.sh   release binaries
 testdata/fakegithub  fake GitHub server binary for e2e
