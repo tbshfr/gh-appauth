@@ -21,7 +21,7 @@ Keep the admin UI away from the agents. The example systemd unit serves it on a 
 
 The agent's OS user should have no `gh auth login` session. Otherwise a `gh` command the shim can't tie to a repo falls back to your personal account.
 
-Tokens are cached locally in a directory only the agent's user can read. If the broker refuses a request (401 or 403), the extension deletes the cached token and doesn't fall back to it, so revoking a client takes effect on the next request. Details are in [Local token cache](extension.md#local-token-cache).
+Tokens are cached locally in a directory only the agent's user can read. If the broker refuses a request (401 or 403), the extension deletes the cached token and doesn't fall back to it, so revoking a client takes effect on the next request. A single token revoked on the dashboard stays in the agent's cache until GitHub rejects it; then the extension drops it and gets a new one. Details are in [Local token cache](extension.md#local-token-cache).
 
 ## Backups
 

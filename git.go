@@ -164,22 +164,11 @@ func cmdGitCredential(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	}
 
 	if op == "erase" {
-		// git erases a credential after GitHub rejected it: drop it locally
-		// and tell the broker so it won't serve it from its cache either.
-		removed := eraseCached(r)
+		// Without the password it's unclear which token GitHub rejected.
 		if pw := in["password"]; pw != "" {
-			removed = append(removed, pw)
-		}
-		if len(removed) > 0 {
-			if bc, err := newBrokerClient(cfg); err == nil {
-				seen := map[string]bool{}
-				for _, t := range removed {
-					if !seen[t] {
-						seen[t] = true
-						_ = bc.invalidate(t)
-					}
-				}
-			}
+			dropTokens(cfg, pw)
+		} else {
+			dropTokens(cfg, eraseCached(r)...)
 		}
 		return nil
 	}

@@ -15,6 +15,7 @@ The broker's only third-party dependency is `modernc.org/sqlite`, a pure-Go SQLi
 
 ```
 main.go config.go broker.go git.go shim.go   the gh extension (root package)
+retry*.go sysproc_*.go                       gh shim: retry with a new token, signals
 internal/repo        owner/repo parsing shared by both binaries
 internal/api         JSON types shared by both binaries
 internal/fakegithub  fake GitHub API (verifies RS256 App JWTs) for tests and e2e

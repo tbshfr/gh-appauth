@@ -473,7 +473,15 @@ func (b *Broker) handleInvalidate(w http.ResponseWriter, r *http.Request) {
 		b.fail(w, ev, 500, "error", "database error")
 		return
 	}
-	if t != nil {
+	if t != nil && !t.RevokedAt.IsZero() {
+		// The client still had it cached; record that it noticed.
+		ev.Event, ev.Repo, ev.App, ev.Perms = "invalidated", t.Repo, t.App, permString(t.Permissions)
+		ev.Reason = "client reported token rejected; already revoked"
+		if t.RevokedReason != "" {
+			ev.Reason += " (" + t.RevokedReason + ")"
+		}
+		b.audit(ev)
+	} else if t != nil {
 		_ = b.store.MarkRevoked(t.ID, "rejected by GitHub (reported by client)", b.now())
 		ev.Event, ev.Repo, ev.App, ev.Perms = "invalidated", t.Repo, t.App, permString(t.Permissions)
 		ev.Reason = "client reported token rejected"

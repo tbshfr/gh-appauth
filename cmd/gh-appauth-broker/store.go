@@ -519,8 +519,9 @@ func (s *Store) TokenByID(id int64) (*TokenRow, error) {
 	return t, err
 }
 
+// TokenBySHA returns client's token with this hash, revoked or not.
 func (s *Store) TokenBySHA(client, sha string) (*TokenRow, error) {
-	t, err := scanToken(s.db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE client=? AND token_sha256=? AND revoked_at IS NULL`, client, sha))
+	t, err := scanToken(s.db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE client=? AND token_sha256=?`, client, sha))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
