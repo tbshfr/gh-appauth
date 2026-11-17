@@ -358,8 +358,24 @@ var now = time.Now
 // getToken returns a token for repoName, using the local cache when the
 // cached token has more than 10 minutes left. If the broker is unreachable
 // or rate limiting (not if it refuses), a cached token with at least a
-// minute left is used with a warning.
+// minute left is used with a warning. With cfg.NoCache every call asks the
+// broker and there is no fallback.
 func getToken(cfg *Config, repoName string, perms map[string]string) (*api.TokenResponse, tokenSource, error) {
+	if cfg.NoCache {
+		bc, err := newBrokerClient(cfg)
+		if err != nil {
+			return nil, "", err
+		}
+		t, err := bc.fetchToken(repoName, perms)
+		if err != nil {
+			var be *brokerError
+			if errors.As(err, &be) {
+				err = fmt.Errorf("denied for %s: %s", repoName, be.Msg)
+			}
+			return nil, "", err
+		}
+		return t, fromBroker, nil
+	}
 	path, err := cacheFile(cfg, repoName, perms)
 	if err != nil {
 		return nil, "", err

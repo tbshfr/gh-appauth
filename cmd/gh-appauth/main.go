@@ -32,6 +32,7 @@ const usage = `gh appauth: GitHub App tokens for git and gh, from a gh-appauth b
 
 Usage:
   gh appauth setup --broker URL [--fingerprint SHA256] [--ca-file F] [--insecure-http]
+                   [--no-cache]
                                     save broker settings (secret read from stdin)
   gh appauth status                 show broker, client, grants and current repo
   gh appauth token [OWNER/REPO] [--perm k=v]... [--json]
@@ -54,10 +55,10 @@ Internal:
   gh appauth gh-shim ARGS...
 
 Environment: GH_APPAUTH_BROKER, GH_APPAUTH_SECRET, GH_APPAUTH_CA_FILE,
-GH_APPAUTH_FINGERPRINT and GH_APPAUTH_INSECURE_HTTP=1 override the config file;
-GH_APPAUTH_REPO sets the repo for the gh shim and exec when the command doesn't
-name one and GH_REPO isn't set; GH_APPAUTH_GITHUB_API sets the GitHub API URL
-the shim checks a token with.
+GH_APPAUTH_FINGERPRINT, GH_APPAUTH_INSECURE_HTTP=1 and GH_APPAUTH_NO_CACHE=1
+override the config file; GH_APPAUTH_REPO sets the repo for the gh shim and
+exec when the command doesn't name one and GH_REPO isn't set;
+GH_APPAUTH_GITHUB_API sets the GitHub API URL the shim checks a token with.
 `
 
 // exitCode is returned by commands that run a child process.
@@ -138,6 +139,7 @@ func cmdSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	caFile := fs.String("ca-file", "", "extra CA certificate PEM to trust for the broker")
 	insecure := fs.Bool("insecure-http", false, "allow plain http:// to a non-loopback broker (secret travels unencrypted)")
 	host := fs.String("host", "", "GitHub host (default github.com)")
+	noCache := fs.Bool("no-cache", false, "don't cache tokens locally: every command asks the broker")
 	if err := fs.Parse(args); err != nil {
 		return exitCode(2)
 	}
@@ -145,7 +147,7 @@ func cmdSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg := &Config{Broker: strings.TrimRight(*broker, "/"), CAFile: *caFile, Fingerprint: *fp, InsecureHTTP: *insecure, Host: *host, RealGH: old.RealGH}
+	cfg := &Config{Broker: strings.TrimRight(*broker, "/"), CAFile: *caFile, Fingerprint: *fp, InsecureHTTP: *insecure, Host: *host, NoCache: *noCache, RealGH: old.RealGH}
 	if cfg.Broker == "" {
 		return errors.New("--broker is required")
 	}
@@ -184,6 +186,10 @@ func cmdSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "Authenticated as client %q (from %s). Saved %s\n", who.Client, who.IP, p)
 	for _, g := range who.Grants {
 		fmt.Fprintf(stdout, "  %s → %s %s\n", g.App, strings.Join(g.Repos, ", "), permOrAll(g.Permissions))
+	}
+	// Setup rewrites every setting, and losing this one would quietly end the broker's per-command audit trail.
+	if old.NoCache && !cfg.NoCache {
+		fmt.Fprintln(stdout, "Note: the local token cache is on again; pass --no-cache to keep it off.")
 	}
 	fmt.Fprintln(stdout, "Next: gh appauth git-setup")
 	return nil
@@ -270,6 +276,9 @@ func cmdStatus(stdout io.Writer) error {
 		fmt.Fprintf(stdout, "Trust:   NONE (plain HTTP)\n")
 	default:
 		fmt.Fprintf(stdout, "Trust:   system CAs\n")
+	}
+	if cfg.NoCache {
+		fmt.Fprintln(stdout, "Cache:   off (every command asks the broker)")
 	}
 	bc, err := newBrokerClient(cfg)
 	if err != nil {
