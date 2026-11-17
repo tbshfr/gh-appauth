@@ -26,11 +26,26 @@ By default the broker serves TLS with a self-signed certificate and clients pin 
 In GitHub, go to Settings → Developer settings → GitHub Apps → New GitHub App:
 
 - Turn off the webhook.
-- Under repository permissions, set Contents, Pull requests and Issues to read & write, and Metadata to read. Add Workflows only if agents need to edit `.github/workflows`.
+- Under repository permissions, pick what your agents need.
 - Install the App on selected repositories.
 - Generate a private key (`.pem`) and note the App ID.
 
-The App's permissions are the upper limit for every token the broker issues for it. Grants can only narrow them further.
+These are the repository permissions agents most commonly need. Leave out any you don't want them to have.
+
+| Permission | Access | What it's for |
+|---|---|---|
+| Metadata | Read-only | GitHub sets this one on every App. |
+| Contents | Read and write | `git clone`, `fetch` and `push` |
+| Pull requests | Read and write | `gh pr create`, `view`, `comment` and `merge` |
+| Issues | Read and write | `gh issue` |
+| Actions | Read-only | `gh run list`, `gh run view` and job logs |
+| Checks | Read-only | CI results in `gh pr checks` and `gh pr view` |
+| Commit statuses | Read-only | CI results from services that report commit statuses instead of check runs |
+| Workflows | Read and write | Pushing changes to `.github/workflows` |
+
+On a public repo anyone can read check results, so `gh pr checks` works without Checks or Commit statuses. On a private repo it fails with `Resource not accessible by integration`.
+
+The App's permissions are the upper limit for every token the broker issues for it. Grants can only narrow them further. If you add a permission to an App that's already installed, GitHub asks the owner of each installation to approve it. Until they do, the broker's tokens don't include it.
 
 You can create more than one App, for example one per group of repos, and add them all to the same broker.
 
