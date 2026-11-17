@@ -38,7 +38,9 @@ https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}
 
 {% for contributor in github.contributors | filter(attribute="is_first_time", value=true) %}
     - @{{ contributor.username }} made their first contribution\
-    {% if contributor.pr_number %} in [#{{ contributor.pr_number }}]({{ self::remote_url() }}/pull/{{ contributor.pr_number }}){% endif %}
+    {#- pr_number is from the contributor's newest commit; pr_numbers is sorted, so first is their earliest PR. #}
+    {%- set first_pr = contributor.pr_numbers | first %}\
+    {% if first_pr %} in [#{{ first_pr }}]({{ self::remote_url() }}/pull/{{ first_pr }}){% endif %}
 {% endfor %}
 {%- endif %}
 """
@@ -59,9 +61,11 @@ require_conventional = false
 # Don't split multiline commits into separate entries.
 split_commits = false
 
-# No commit preprocessing needed because GitHub metadata is used
-# for PR links.
-commit_preprocessors = []
+# Squash merges append " (#N)" to the subject; the template links the PR
+# from GitHub metadata, so drop it to avoid listing the PR twice.
+commit_preprocessors = [
+    { pattern = '^([^\n]*?)\s*\(#[0-9]+\)(\n|$)', replace = "$1$2" },
+]
 
 # Allow parsers to skip breaking commits too.
 protect_breaking_commits = false
