@@ -19,7 +19,7 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; echo "--- broker log"; cat "$
 echo "== build"
 BIN=$WORK/bin
 mkdir -p "$BIN"
-(cd "$ROOT" && go build -o "$BIN/gh-appauth" . \
+(cd "$ROOT" && go build -o "$BIN/gh-appauth" ./cmd/gh-appauth \
   && go build -o "$BIN/gh-appauth-broker" ./cmd/gh-appauth-broker \
   && go build -o "$BIN/fakegithub" ./testdata/fakegithub)
 EXT=$BIN/gh-appauth

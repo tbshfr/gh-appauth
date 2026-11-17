@@ -49,7 +49,7 @@ If you want to tie the client to the machine it runs on, fill in its allowed sou
 ## 4. Agent machine
 
 ```bash
-gh extension install tbshfr/gh-appauth           # or: go build && gh extension install .
+gh extension install tbshfr/gh-appauth           # or: go build -o gh-appauth ./cmd/gh-appauth && gh extension install .
 gh appauth setup --broker https://broker.lan:8443 --fingerprint AB:CD:…   # paste the secret
 gh appauth git-setup                              # git uses the broker for https://github.com
 gh appauth shim ~/.local/gh-appauth-bin           # optional: plain `gh` uses App tokens

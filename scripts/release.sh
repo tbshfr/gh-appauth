@@ -22,12 +22,12 @@ build() {
 # `gh extension install` picks the first asset whose name ends in
 # "<os>-<arch>[.exe]", so only the extension may use that suffix; the broker
 # uses underscores.
-build linux amd64 . linux-amd64
-build linux arm64 . linux-arm64
-build darwin amd64 . darwin-amd64
-build darwin arm64 . darwin-arm64
-build windows amd64 . windows-amd64.exe
-build windows arm64 . windows-arm64.exe
+build linux amd64 ./cmd/gh-appauth linux-amd64
+build linux arm64 ./cmd/gh-appauth linux-arm64
+build darwin amd64 ./cmd/gh-appauth darwin-amd64
+build darwin arm64 ./cmd/gh-appauth darwin-arm64
+build windows amd64 ./cmd/gh-appauth windows-amd64.exe
+build windows arm64 ./cmd/gh-appauth windows-arm64.exe
 
 build linux amd64 ./cmd/gh-appauth-broker "gh-appauth-broker_${VERSION}_linux_amd64"
 build linux arm64 ./cmd/gh-appauth-broker "gh-appauth-broker_${VERSION}_linux_arm64"
