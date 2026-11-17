@@ -23,6 +23,7 @@ type Config struct {
 	InsecureHTTP bool   `json:"insecure_http,omitempty"`
 	RealGH       string `json:"real_gh,omitempty"`
 	Host         string `json:"host,omitempty"`
+	NoCache      bool   `json:"no_cache,omitempty"`
 }
 
 func (c *Config) GitHubHost() string {
@@ -97,6 +98,9 @@ func loadConfig() (*Config, error) {
 	}
 	if v := os.Getenv("GH_APPAUTH_INSECURE_HTTP"); v == "1" || strings.EqualFold(v, "true") {
 		c.InsecureHTTP = true
+	}
+	if v := os.Getenv("GH_APPAUTH_NO_CACHE"); v == "1" || strings.EqualFold(v, "true") {
+		c.NoCache = true
 	}
 	if c.Broker == "" || c.Secret == "" {
 		return nil, errors.New("not configured; run: gh appauth setup --broker URL")

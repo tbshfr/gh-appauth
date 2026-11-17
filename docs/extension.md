@@ -6,7 +6,7 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 
 | Command | |
 |---|---|
-| `setup --broker URL [--fingerprint FP] [--ca-file F] [--insecure-http] [--host H]` | Reads the secret from stdin (no echo on a TTY), checks it against `/v1/whoami`, and saves `~/.config/gh-appauth/config.json` with mode 0600. |
+| `setup --broker URL [--fingerprint FP] [--ca-file F] [--insecure-http] [--host H] [--no-cache]` | Reads the secret from stdin (no echo on a TTY), checks it against `/v1/whoami`, and saves `~/.config/gh-appauth/config.json` with mode 0600. `--no-cache` turns off the [local token cache](#without-the-local-cache). |
 | `status` | Broker reachability and latency, TLS details, client, grants, and for the current repo the App, bot, expiry, permissions and token source (never the token itself). |
 | `token [OWNER/REPO] [--perm k=v]... [--json]` | Prints a token. The default repo is the current folder's `origin`. |
 | `repos OWNER [--no-archived] [--json]` | Lists OWNER's repos this client can get a token for, one per line with tab-separated name, default branch, visibility and App. Use it in place of `gh repo list OWNER`, which can't see past a single repo. |
@@ -19,7 +19,7 @@ The `gh-appauth` binary is a `gh` CLI extension, so its commands run as `gh appa
 
 ## Environment variables
 
-`GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_CA_FILE`, `GH_APPAUTH_FINGERPRINT` and `GH_APPAUTH_INSECURE_HTTP=1` override the config file, which is useful in containers. `GH_APPAUTH_GITHUB_API` sets the GitHub API URL the shim uses to check a token (see [Local token cache](#local-token-cache)). `GH_APPAUTH_REPO` tells the `gh` shim and `exec` which repo to use when the command doesn't name one and `GH_REPO` isn't set. It takes priority over the current folder's remotes.
+`GH_APPAUTH_BROKER`, `GH_APPAUTH_SECRET`, `GH_APPAUTH_CA_FILE`, `GH_APPAUTH_FINGERPRINT`, `GH_APPAUTH_INSECURE_HTTP=1` and `GH_APPAUTH_NO_CACHE=1` override the config file, which is useful in containers. `GH_APPAUTH_GITHUB_API` sets the GitHub API URL the shim uses to check a token (see [Local token cache](#local-token-cache)). `GH_APPAUTH_REPO` tells the `gh` shim and `exec` which repo to use when the command doesn't name one and `GH_REPO` isn't set. It takes priority over the current folder's remotes.
 
 ## Commit identity
 
@@ -75,6 +75,12 @@ The shim runs a command again only if gh failed within 10 seconds, since a later
 While gh runs, the shim passes SIGINT, SIGTERM and SIGHUP on to it, so a timeout that stops the shim stops gh too. On Linux gh also gets SIGTERM if the shim is killed with SIGKILL. At a terminal, Ctrl-C and a hangup already reach gh from the terminal, so the shim doesn't send them a second time, and gh's own result decides how the shim exits. When gh dies of one of these three signals, or the shim passed one on, the shim dies of it too, so a shell loop around it ends as it would for gh. Other signals that stop gh, such as SIGPIPE from `| head`, give exit code 128 plus the signal number. Signals the shim started with ignored, as under `nohup`, stay ignored.
 
 To check a token, the shim calls `https://api.github.com`, `https://api.HOST` for a GHE.com host, or `https://HOST/api/v3` for GitHub Enterprise Server. Set `GH_APPAUTH_GITHUB_API` if the API is somewhere else.
+
+### Without the local cache
+
+With `setup --no-cache` or `GH_APPAUTH_NO_CACHE=1`, the extension keeps no tokens on disk and asks the broker on every command, for git as well as gh. The broker still reuses a token while it has more than 10 minutes left, so most commands get the same token as the command before them. What changes is what the broker sees: every command that needs a token appears in its request history, and each time the broker hands out a token it already issued, that token's reuse count on the dashboard goes up. gh commands that run without a repo, and ones like `gh auth`, don't contact the broker.
+
+Nothing falls back in this mode. If the broker is unreachable or rate limiting, the command fails. Every command also counts toward the broker's limit of 60 token requests per minute per client, and a busy agent that runs gh or git in a loop can reach it. A `git clone` uses two requests: one for the credential helper and one for the hook that sets the commit identity. Tokens cached before you turned the cache off stay on disk unused until they expire; `gh appauth cache clear` removes them. `setup` rewrites the whole config, so run it with `--no-cache` again when you rotate the secret, or the cache comes back on. It says so when that happens.
 
 ## Known gaps
 

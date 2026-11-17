@@ -134,7 +134,7 @@ func isolate(t *testing.T) (cfgDir, cacheDirPath string) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(d, "cache"))
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("HOME", d)
-	for _, k := range []string{"GH_APPAUTH_BROKER", "GH_APPAUTH_SECRET", "GH_APPAUTH_CA_FILE", "GH_APPAUTH_FINGERPRINT", "GH_APPAUTH_INSECURE_HTTP", "GH_APPAUTH_REPO"} {
+	for _, k := range []string{"GH_APPAUTH_BROKER", "GH_APPAUTH_SECRET", "GH_APPAUTH_CA_FILE", "GH_APPAUTH_FINGERPRINT", "GH_APPAUTH_INSECURE_HTTP", "GH_APPAUTH_REPO", "GH_APPAUTH_NO_CACHE"} {
 		t.Setenv(k, "")
 	}
 	return filepath.Join(d, "config", "gh-appauth"), filepath.Join(d, "cache", "gh-appauth")
@@ -291,6 +291,37 @@ func TestTokenCache(t *testing.T) {
 	}
 	// ...but not with <1 min left.
 	writeCached(p, &api.TokenResponse{Token: "ghs_old", ExpiresAt: time.Now().Add(30 * time.Second), Repository: "acme/web"})
+	if _, _, err := getToken(cfg, "acme/web", nil); err == nil || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("expected unreachable error, got %v", err)
+	}
+}
+
+func TestNoCache(t *testing.T) {
+	_, cdir := isolate(t)
+	fb := newFakeBroker(t, true)
+	useBroker(t, fb)
+	t.Setenv("GH_APPAUTH_NO_CACHE", "1")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A token left over from before no_cache was turned on is ignored.
+	cacheToken(t, nil, "ghs_old")
+	for i := 1; i <= 2; i++ {
+		tok, src, err := getToken(cfg, "acme/web", nil)
+		if err != nil || src != fromBroker || tok.Token == "ghs_old" || fb.calls() != i {
+			t.Fatalf("call %d: %v %s, %d broker calls", i, err, src, fb.calls())
+		}
+	}
+	if files, _ := os.ReadDir(cdir); len(files) != 1 {
+		t.Fatalf("cache dir holds %d files, want only the old one", len(files))
+	}
+	fb.tokenStatus = 429
+	if _, _, err := getToken(cfg, "acme/web", nil); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("rate limited: want the broker's refusal, got %v", err)
+	}
+	fb.tokenStatus = 0
+	fb.srv.Close()
 	if _, _, err := getToken(cfg, "acme/web", nil); err == nil || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("expected unreachable error, got %v", err)
 	}
@@ -476,8 +507,23 @@ func TestSetup(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(dir, "config.json"))
 	var c Config
 	json.Unmarshal(b, &c)
-	if c.Secret != testSecret || c.Fingerprint != fb.fingerprint() {
+	if c.Secret != testSecret || c.Fingerprint != fb.fingerprint() || c.NoCache {
 		t.Fatalf("saved %+v", c)
+	}
+	err = run([]string{"setup", "--broker", fb.srv.URL, "--fingerprint", fb.fingerprint(), "--no-cache"}, strings.NewReader(testSecret+"\n"), &out, &errb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "config.json"))
+	c = Config{}
+	json.Unmarshal(b, &c)
+	if !c.NoCache {
+		t.Fatalf("--no-cache not saved: %+v", c)
+	}
+	out.Reset()
+	err = run([]string{"setup", "--broker", fb.srv.URL, "--fingerprint", fb.fingerprint()}, strings.NewReader(testSecret+"\n"), &out, &errb)
+	if err != nil || !strings.Contains(out.String(), "--no-cache") {
+		t.Fatalf("re-running setup without --no-cache should say the cache is on again: %v %q", err, out.String())
 	}
 	// A wrong secret is not saved.
 	err = run([]string{"setup", "--broker", fb.srv.URL, "--fingerprint", fb.fingerprint()}, strings.NewReader("gaa_wrong\n"), &out, &errb)

@@ -164,7 +164,8 @@ func cmdGitCredential(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 	}
 
 	if op == "erase" {
-		// Without the password it's unclear which token GitHub rejected.
+		// Without the password it's unclear which token GitHub rejected. With
+		// no_cache the used token isn't on disk, so it isn't invalidated here.
 		if pw := in["password"]; pw != "" {
 			dropTokens(cfg, pw)
 		} else {
