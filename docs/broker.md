@@ -16,6 +16,7 @@ gh-appauth-broker serve [flags]
   -trusted-proxies LIST  CIDRs whose X-Forwarded-For is trusted (default: none, header ignored)
   -github-api URL      default https://api.github.com (GitHub Enterprise: https://HOST/api/v3)
   -history-days N      request history retention (default 30)
+  -tokens-per-minute N  token requests and repo listings per minute per client (default 60)
 
 gh-appauth-broker set-password               admin UI password (stdin; ≥10 chars; logs out all sessions)
 gh-appauth-broker check                      validate stored config and keys
@@ -67,7 +68,7 @@ Error codes:
 | `400` | Bad body, repo name or owner. |
 | `401` | Unknown or disabled secret. |
 | `403` | No grant, permission escalation, wrong source IP, or the App isn't installed on that repo. |
-| `429` | Rate limited: 60 token requests and repo listings per minute per client, or about 20 failed authentications per minute per IP (per /64 for IPv6). A limited address is refused even with a valid secret. |
+| `429` | Rate limited: by default 60 token requests and repo listings per minute per client (set with `-tokens-per-minute`), or about 20 failed authentications per minute per IP (per /64 for IPv6). A limited address is refused even with a valid secret. |
 | `502` | GitHub returned an error. |
 
 ## Caching

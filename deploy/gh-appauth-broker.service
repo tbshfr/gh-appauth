@@ -20,6 +20,9 @@ ExecStart=/usr/local/bin/gh-appauth-broker serve -data-dir /var/lib/gh-appauth-b
 #                                 self-signed cert only covers localhost and the
 #                                 hostname unless you list the names/IPs here
 #   -trusted-proxies 127.0.0.1/32 when behind a local reverse proxy
+#   -tokens-per-minute 240        raise the per-client token rate limit
+#                                 (default 60) for clients that run with
+#                                 the extension's cache off
 ExecReload=/bin/kill -HUP $MAINPID
 
 StateDirectory=gh-appauth-broker

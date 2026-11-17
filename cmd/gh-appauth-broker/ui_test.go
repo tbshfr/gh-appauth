@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -347,6 +348,21 @@ func TestUIVersion(t *testing.T) {
 		_, body := u.get("/ui/settings")
 		if !strings.Contains(body, tc.want) {
 			t.Errorf("%s: settings page lacks %s", tc.version, tc.want)
+		}
+	}
+}
+
+func TestUITokenRateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		set, want int
+	}{{0, defaultTokensPerMinute}, {240, 240}} {
+		e := newEnv(t, func(o *Options) { o.TokensPerMinute = tc.set })
+		u := newUIClient(t, e)
+		u.get("/ui/login")
+		u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+		_, body := u.get("/ui/settings")
+		if want := fmt.Sprintf("<dd>%d token requests and repo listings per minute per client</dd>", tc.want); !strings.Contains(body, want) {
+			t.Errorf("TokensPerMinute=%d: settings page lacks %s", tc.set, want)
 		}
 	}
 }

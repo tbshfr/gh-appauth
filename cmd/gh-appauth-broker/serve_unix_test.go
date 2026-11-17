@@ -7,6 +7,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,14 +102,21 @@ func TestServeSelfSignedTLSStableFingerprint(t *testing.T) {
 
 func TestServeTLSOff(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "b.db")
-	addrs, done := startServe(t, serveConfig{DB: db, Listen: "127.0.0.1:0", TLSMode: tlsOff, GitHubAPI: "http://127.0.0.1:1", HistoryDays: 30})
-	resp, err := http.Get("http://" + addrs[0] + "/ui/login")
-	if err != nil {
-		t.Fatal(err)
+	st, err := OpenStore(db)
+	must(t, err)
+	h, err := hashPassword("correct horse battery")
+	must(t, err)
+	must(t, st.SetSetting("admin_password", h))
+	st.Close()
+	addrs, done := startServe(t, serveConfig{DB: db, Listen: "127.0.0.1:0", TLSMode: tlsOff, GitHubAPI: "http://127.0.0.1:1", HistoryDays: 30, TokensPerMinute: 240})
+	jar, _ := cookiejar.New(nil)
+	u := &uiClient{t: t, srv: &httptest.Server{URL: "http://" + addrs[0]}, c: &http.Client{Jar: jar}}
+	if code, _ := u.get("/ui/login"); code != 200 {
+		t.Fatalf("shared UI: %d", code)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("shared UI: %d", resp.StatusCode)
+	u.post("/ui/login", url.Values{"password": {"correct horse battery"}})
+	if _, body := u.get("/ui/settings"); !strings.Contains(body, "<dd>240 token requests") {
+		t.Error("settings page does not show -tokens-per-minute 240")
 	}
 	stopServe(t, done)
 }
