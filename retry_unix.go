@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const canSignal = true
+
 func inForegroundGroup() bool {
 	tty, err := os.Open("/dev/tty")
 	if err != nil {

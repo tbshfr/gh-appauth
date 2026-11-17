@@ -380,8 +380,8 @@ func TestShimUnrelated401(t *testing.T) {
 	}
 }
 
-func TestCheckToken(t *testing.T) {
-	for status, want := range map[int]tokenState{200: tokenAlive, 401: tokenDead, 403: tokenAlive, 404: tokenAlive, 429: tokenAlive, 503: tokenAlive} {
+func TestGitHubRejects(t *testing.T) {
+	for status, want := range map[int]bool{200: false, 401: true, 403: false, 404: false, 429: false, 503: false} {
 		gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer ghs_x" || r.URL.Path != "/installation/repositories" {
 				t.Errorf("request %s %s", r.Header.Get("Authorization"), r.URL.Path)
@@ -389,14 +389,14 @@ func TestCheckToken(t *testing.T) {
 			w.WriteHeader(status)
 		}))
 		t.Setenv("GH_APPAUTH_GITHUB_API", gh.URL+"/")
-		if got := checkToken(&Config{}, "ghs_x"); got != want {
+		if got := githubRejects(&Config{}, "ghs_x"); got != want {
 			t.Errorf("GitHub answers %d: got %v, want %v", status, got, want)
 		}
 		gh.Close()
 	}
 	t.Setenv("GH_APPAUTH_GITHUB_API", "http://127.0.0.1:1")
-	if got := checkToken(&Config{}, "ghs_x"); got != tokenUnknown {
-		t.Errorf("GitHub unreachable: got %v", got)
+	if githubRejects(&Config{}, "ghs_x") {
+		t.Error("GitHub unreachable counted as a rejection")
 	}
 }
 
@@ -418,13 +418,16 @@ func TestGitHubAPI(t *testing.T) {
 	}
 }
 
-// If GitHub can't be asked, gh's own message decides.
+// Without GitHub's word, gh's message alone could revoke a working token.
 func TestShimGitHubUnreachable(t *testing.T) {
-	shimEnv(t)
+	fb, p := shimEnv(t)
 	t.Setenv("GH_APPAUTH_GITHUB_API", "http://127.0.0.1:1")
 	out, errb, err := shim(nil, "pr", "list")
-	if err != nil || !strings.Contains(out, "TOKEN=ghs_tok1_acme_web") || !strings.Contains(errb, "ran the command again") {
+	if err != exitCode(1) || !strings.Contains(out, "Bad credentials") || !strings.Contains(errb, "HTTP 401") || strings.Contains(errb, "gh-appauth:") {
 		t.Fatalf("err %v\nstdout %q\nstderr %q", err, out, errb)
+	}
+	if fb.calls() != 0 || len(fb.invalidations()) != 0 || readCached(p) == nil {
+		t.Fatal("token dropped without GitHub rejecting it")
 	}
 }
 

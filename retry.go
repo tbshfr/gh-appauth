@@ -63,34 +63,23 @@ func rejectedToken(stderr []byte) bool {
 	return bytes.Contains(stderr, []byte("HTTP 401: Bad credentials")) || bytes.Contains(stderr, []byte("Bad credentials (HTTP 401)"))
 }
 
-type tokenState int
-
-const (
-	tokenUnknown tokenState = iota
-	tokenDead
-	tokenAlive
-)
-
 // Only a 401 means the token is dead: acting on a 403, 429 or 5xx would
-// revoke a working token.
-func checkToken(cfg *Config, token string) tokenState {
+// revoke a working token, and so would acting when GitHub doesn't answer.
+func githubRejects(cfg *Config, token string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", githubAPI(cfg)+"/installation/repositories?per_page=1", nil)
 	if err != nil {
-		return tokenUnknown
+		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return tokenUnknown
+		return false
 	}
 	resp.Body.Close()
-	if resp.StatusCode == http.StatusUnauthorized {
-		return tokenDead
-	}
-	return tokenAlive
+	return resp.StatusCode == http.StatusUnauthorized
 }
 
 func runWithRetry(cfg *Config, repoName, token, gh string, args, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -109,10 +98,10 @@ func runWithRetry(cfg *Config, repoName, token, gh string, args, env []string, s
 	if ec := exitCode(0); errors.As(runErr, &ec) {
 		if out.agent {
 			// The message may be about another credential, or quoted.
-			dead = out.rejected() && checkToken(cfg, token) != tokenAlive
+			dead = out.rejected() && githubRejects(cfg, token)
 		} else {
 			// Not on other codes: gh pr checks exits 8 for pending checks.
-			dead = early && ec == 1 && checkToken(cfg, token) == tokenDead
+			dead = early && ec == 1 && githubRejects(cfg, token)
 		}
 	}
 	if !dead {
@@ -203,7 +192,7 @@ func runGH(path string, args, env []string, stdin io.Reader, stdout, stderr io.W
 	var got syscall.Signal
 	pass := func(s os.Signal) {
 		sig := s.(syscall.Signal)
-		if fromTTY && sig != syscall.SIGTERM {
+		if !canSignal || fromTTY && sig != syscall.SIGTERM {
 			return
 		}
 		got = sig
