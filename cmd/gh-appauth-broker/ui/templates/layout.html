@@ -48,7 +48,7 @@
 </body>
 </html>
 {{define "i-key"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8.5" cy="15.5" r="4.5"/><path d="M11.7 12.3 20 4M16.5 7.5l3 3"/></svg>{{end}}
-{{define "permcell"}}{{with permList .}}<details class="perms" title="{{spaced $}}"><summary>{{permSummary .}}</summary><ul>{{range .}}<li><span class="mono">{{.Name}}</span><span class="lvl {{.Level}}">{{.Level}}</span></li>{{end}}</ul></details>{{else}}<span class="muted">—</span>{{end}}{{end}}
+{{define "permcell"}}{{with permList .}}{{$id := uid}}<button type="button" class="perms-btn" popovertarget="{{$id}}">{{permSummary .}}</button><div class="perms-pop" id="{{$id}}" popover><ul>{{range .}}<li><span class="mono">{{.Name}}</span><span class="lvl {{.Level}}">{{.Level}}</span></li>{{end}}</ul></div>{{else}}<span class="muted">—</span>{{end}}{{end}}
 {{define "events"}}
 <div class="table-wrap">
 <table class="log">

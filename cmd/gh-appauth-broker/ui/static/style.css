@@ -198,17 +198,19 @@ tbody tr:hover td:not(.empty) { background: color-mix(in srgb, var(--sunken) 55%
 table.log td { vertical-align: top; }
 table.log .pill { vertical-align: top; margin-top: -1px; }
 td.perms { min-width: 150px; white-space: nowrap; }
-details.perms > summary { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12.5px; cursor: pointer; list-style: none; user-select: none; }
-details.perms > summary::-webkit-details-marker { display: none; }
-details.perms > summary::after { content: ""; width: 10px; height: 10px; background: url(chevron.svg) center / 10px no-repeat; opacity: .6; transition: transform .15s; }
-details.perms[open] > summary::after { transform: rotate(180deg); }
-details.perms > summary:hover { color: var(--fg); }
-details.perms ul { display: grid; grid-template-columns: auto auto; gap: 2px 14px; margin: 6px 0 2px; padding: 0; list-style: none; }
-details.perms li { display: contents; }
-details.perms li .mono { color: var(--fg-2); }
-details.perms .lvl { color: var(--muted); font-size: 12px; }
-details.perms .lvl.write { color: var(--accent); }
-details.perms .lvl.admin { color: var(--warn); }
+.perms-btn, .perms-btn:hover { height: auto; padding: 0; border: 0; background: none; box-shadow: none; gap: 6px; color: var(--fg-2); font-size: 12.5px; font-weight: 400; }
+.perms-btn:active { transform: none; }
+.perms-btn:hover, .perms-btn:has(+ :popover-open) { color: var(--fg); }
+.perms-btn::after { content: ""; width: 10px; height: 10px; background: url(chevron.svg) center / 10px no-repeat; opacity: .6; transition: transform .15s; }
+.perms-btn:has(+ :popover-open)::after { transform: rotate(180deg); }
+/* Absolute, not the default fixed, so it scrolls with the page. */
+.perms-pop { position: absolute; inset: auto; margin: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); box-shadow: var(--shadow-pop); font-size: 13px; }
+.perms-pop ul { display: grid; grid-template-columns: max-content max-content; gap: 3px 16px; margin: 0; padding: 0; list-style: none; }
+.perms-pop li { display: contents; }
+.perms-pop li .mono { color: var(--fg-2); font-size: 12.5px; }
+.perms-pop .lvl { color: var(--muted); font-size: 12px; }
+.perms-pop .lvl.write { color: var(--accent); }
+.perms-pop .lvl.admin { color: var(--warn); }
 td.detail { min-width: 260px; }
 td .sub { margin-top: 1px; color: var(--muted); font-size: 12px; }
 td .mono { font-size: 12.5px; }

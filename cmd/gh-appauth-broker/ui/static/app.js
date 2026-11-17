@@ -60,6 +60,25 @@ document.addEventListener("click", (e) => {
   navigator.clipboard.writeText(src.textContent.trim()).then(() => done("Copied"));
 });
 
+function placePopover(pop) {
+  const btn = document.querySelector(`[popovertarget="${pop.id}"]`);
+  if (!btn) return;
+  const r = btn.getBoundingClientRect(), p = pop.getBoundingClientRect(), gap = 6, pad = 8;
+  let top = r.bottom + gap;
+  if (top + p.height > innerHeight - pad && r.top - gap - p.height >= pad) top = r.top - gap - p.height;
+  const left = Math.max(pad, Math.min(r.left, innerWidth - p.width - pad));
+  pop.style.top = top + scrollY + "px";
+  pop.style.left = left + scrollX + "px";
+}
+
+// Not "toggle": Chromium fires it after the first paint, so the popover flashes at the wrong spot.
+document.addEventListener("beforetoggle", (e) => {
+  if (e.newState === "open" && e.target.matches(".perms-pop")) requestAnimationFrame(() => placePopover(e.target));
+}, true);
+const repositionOpen = () => document.querySelectorAll(".perms-pop:popover-open").forEach(placePopover);
+document.addEventListener("scroll", repositionOpen, { capture: true, passive: true });
+addEventListener("resize", repositionOpen);
+
 document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
   btn.hidden = false;
   btn.addEventListener("click", () => {

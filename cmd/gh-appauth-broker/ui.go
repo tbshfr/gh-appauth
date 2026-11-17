@@ -20,11 +20,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 //go:embed ui/templates/*.html ui/static/*
 var uiFS embed.FS
+
+var idSeq atomic.Uint64
 
 const (
 	sessionCookie = "gaa_session"
@@ -90,6 +93,7 @@ func newUI(b *Broker) *ui {
 		},
 		"permList":    permList,
 		"permSummary": permSummary,
+		"uid":         func() string { return "u" + strconv.FormatUint(idSeq.Add(1), 36) },
 		"common":      func() []string { return commonPerms },
 		"noperms":     func() map[string]string { return map[string]string{} },
 		"dict": func(kv ...any) map[string]any {
