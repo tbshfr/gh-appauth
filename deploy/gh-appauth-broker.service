@@ -23,6 +23,8 @@ ExecStart=/usr/local/bin/gh-appauth-broker serve -data-dir /var/lib/gh-appauth-b
 #   -tokens-per-minute 240        raise the per-client token rate limit
 #                                 (default 60) for clients that run with
 #                                 the extension's cache off
+# Each flag can also be set with Environment=, e.g.
+# Environment=GH_APPAUTH_BROKER_TOKENS_PER_MINUTE=240 (see docs/broker.md).
 ExecReload=/bin/kill -HUP $MAINPID
 
 StateDirectory=gh-appauth-broker

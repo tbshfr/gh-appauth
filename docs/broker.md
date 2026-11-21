@@ -4,8 +4,8 @@
 
 ```
 gh-appauth-broker serve [flags]
-  -data-dir DIR        directory for broker.db (default data/ next to the binary, env GH_APPAUTH_BROKER_DATA_DIR)
-  -db FILE             SQLite database file, overrides -data-dir (env GH_APPAUTH_BROKER_DB)
+  -data-dir DIR        directory for broker.db (default data/ next to the binary)
+  -db FILE             SQLite database file, overrides -data-dir
   -listen ADDR         API address, host:port or unix:/path (default :8443)
   -ui-listen ADDR      admin UI: ""  = under /ui/ on the API port (default)
                                  "off" = disabled
@@ -24,6 +24,24 @@ gh-appauth-broker fingerprint                self-signed certificate SHA-256
 (all of these also take -data-dir DIR or -db FILE)
 gh-appauth-broker version                    print the version (also shown in the admin UI)
 ```
+
+### Environment variables
+
+Every flag can also be set from an environment variable named `GH_APPAUTH_BROKER_` plus the flag name in upper case with `-` turned into `_`: `-data-dir` is `GH_APPAUTH_BROKER_DATA_DIR`, `-ui-listen` is `GH_APPAUTH_BROKER_UI_LISTEN`, `-tokens-per-minute` is `GH_APPAUTH_BROKER_TOKENS_PER_MINUTE`. `-h` lists the name next to each flag.
+
+A flag on the command line wins over the environment, and the environment wins over the built-in default. That includes `-db` and `-data-dir`: `-data-dir` on the command line beats `GH_APPAUTH_BROKER_DB`. A variable that is set but empty counts as unset. An invalid value stops the broker with an error that names the variable. A variable applies to every command with that flag, so `GH_APPAUTH_BROKER_TLS_CERT` also makes `fingerprint` show that certificate.
+
+This is handy in containers. For example, in a Docker Compose service:
+
+```yaml
+    command: ["gh-appauth-broker", "serve"]
+    environment:
+      GH_APPAUTH_BROKER_DATA_DIR: /data
+      GH_APPAUTH_BROKER_UI_LISTEN: "off"
+      GH_APPAUTH_BROKER_TOKENS_PER_MINUTE: "240"
+```
+
+No flag takes a secret as its value. A future flag that needs one will take a file instead (`-something-file`), so its variable will be `GH_APPAUTH_BROKER_SOMETHING_FILE` and hold a path, which works with Docker and Compose secrets.
 
 ## TLS modes
 

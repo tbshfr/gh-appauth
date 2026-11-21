@@ -86,6 +86,7 @@ stop_broker() { kill "$BROKER_PID"; wait "$BROKER_PID" 2>/dev/null || true; }
 export HOME=$WORK/home XDG_CONFIG_HOME=$WORK/home/.config XDG_CACHE_HOME=$WORK/home/.cache
 export GH_APPAUTH_GITHUB_API=$GHAPI
 unset XDG_RUNTIME_DIR GH_PATH GH_TOKEN GITHUB_TOKEN GH_APPAUTH_BROKER GH_APPAUTH_SECRET || true
+unset "${!GH_APPAUTH_BROKER_@}"   # broker flags from the environment would change the test setup
 export GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 mkdir -p "$HOME"
 git config --global init.defaultBranch main

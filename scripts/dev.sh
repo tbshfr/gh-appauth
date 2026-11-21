@@ -8,6 +8,7 @@
 # GitHub forgets its tokens on restart, so revoking a token issued by an
 # earlier run fails.
 set -euo pipefail
+unset "${!GH_APPAUTH_BROKER_@}"   # broker flags from the environment would change the dev setup
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=$ROOT/.dev
