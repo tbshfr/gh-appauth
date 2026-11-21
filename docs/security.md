@@ -17,6 +17,10 @@ The client secret travels over the network. Use TLS (the default is a self-signe
 
 Keep the admin UI away from the agents. The example systemd unit serves it on a separate port bound to loopback, so a machine that can reach the token API still can't reach the login page. See [Admin UI](broker.md#admin-ui) for the session and cookie settings.
 
+## Single sign-on
+
+With [single sign-on](broker.md#single-sign-on-oidc), membership in an allowed group is full admin access, so the provider decides who administers the broker. Only use a groups claim that users can't change themselves. The broker checks the ID token's signature, issuer, audience, expiry, nonce and authorized party, and binds each sign-in to the browser with a state value and PKCE kept in a short-lived cookie. It never shows text from the provider's error responses. The client secret is read from a file, and ID and access tokens are neither stored nor logged.
+
 ## On the agent machine
 
 The agent's OS user should have no `gh auth login` session. Otherwise a `gh` command the shim can't tie to a repo falls back to your personal account.

@@ -50,6 +50,8 @@ type Options struct {
 	SecureCookies bool
 	// Info is shown read-only on the UI settings page.
 	Info ServerInfo
+	// OIDC, if set, enables single sign-on to the admin UI.
+	OIDC *OIDCConfig
 }
 
 type ServerInfo struct {
@@ -101,7 +103,8 @@ type Broker struct {
 	keyLocks  map[string]*keyLock
 	lastTouch map[int64]time.Time
 
-	ui *ui
+	ui  *ui
+	sso *sso
 }
 
 type keyLock struct {
@@ -152,6 +155,9 @@ func NewBroker(store *Store, opts Options) (*Broker, error) {
 	}
 	if err := b.Reload(); err != nil {
 		return nil, err
+	}
+	if opts.OIDC != nil {
+		b.sso = newSSO(*opts.OIDC, b.now)
 	}
 	b.ui = newUI(b)
 	return b, nil

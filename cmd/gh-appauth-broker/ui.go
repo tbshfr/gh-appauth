@@ -60,6 +60,7 @@ type flash struct {
 type session struct {
 	idSHA string
 	csrf  string
+	user  string
 }
 
 type page struct {
@@ -70,6 +71,7 @@ type page struct {
 	Err      string
 	Info     ServerInfo
 	LoggedIn bool
+	User     string
 	Data     any
 }
 
@@ -267,6 +269,10 @@ func (u *ui) mount(mux *http.ServeMux) {
 	mux.Handle("GET /ui/login", u.headers(http.HandlerFunc(u.loginPage)))
 	mux.Handle("POST /ui/login", u.headers(http.HandlerFunc(u.login)))
 	mux.Handle("POST /ui/logout", u.authed(u.logout))
+	if u.b.sso != nil {
+		mux.Handle("GET /ui/oidc/login", u.headers(http.HandlerFunc(u.oidcLogin)))
+		mux.Handle("GET "+oidcCallbackPath, u.headers(http.HandlerFunc(u.oidcCallback)))
+	}
 
 	mux.Handle("GET /ui/{$}", u.authed(u.dashboard))
 	mux.Handle("POST /ui/tokens/{id}/revoke", u.authed(u.revokeToken))
@@ -291,6 +297,7 @@ func (u *ui) mount(mux *http.ServeMux) {
 
 	mux.Handle("GET /ui/settings", u.authed(u.settings))
 	mux.Handle("POST /ui/settings/password", u.authed(u.changePassword))
+	mux.Handle("POST /ui/settings/sessions/delete", u.authed(u.signOutAll))
 	mux.Handle("POST /ui/settings/reload", u.authed(u.reload))
 }
 
@@ -312,11 +319,11 @@ func (u *ui) session(r *http.Request) *session {
 		return nil
 	}
 	idSHA := sha256Hex(c.Value)
-	csrf, ok := u.b.store.Session(idSHA, u.b.now())
+	csrf, user, ok := u.b.store.Session(idSHA, u.b.now())
 	if !ok {
 		return nil
 	}
-	return &session{idSHA: idSHA, csrf: csrf}
+	return &session{idSHA: idSHA, csrf: csrf, user: user}
 }
 
 type authedFunc func(w http.ResponseWriter, r *http.Request, s *session)
@@ -349,10 +356,15 @@ func (u *ui) authed(h authedFunc) http.Handler {
 }
 
 func (u *ui) render(w http.ResponseWriter, r *http.Request, s *session, name, nav, title string, data any) {
-	p := page{Title: title, Nav: nav, Info: u.b.info(), Data: data}
+	p := page{Title: title, Nav: nav, Data: data}
 	p.Msg, p.Err = takeNotice(w, r)
+	u.renderPage(w, s, http.StatusOK, name, p)
+}
+
+func (u *ui) renderPage(w http.ResponseWriter, s *session, code int, name string, p page) {
+	p.Info = u.b.info()
 	if s != nil {
-		p.CSRF, p.LoggedIn = s.csrf, true
+		p.CSRF, p.LoggedIn, p.User = s.csrf, true, s.user
 	}
 	var buf bytes.Buffer
 	if err := u.pages[name].Execute(&buf, p); err != nil {
@@ -360,6 +372,7 @@ func (u *ui) render(w http.ResponseWriter, r *http.Request, s *session, name, na
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
 	buf.WriteTo(w)
 }
 
@@ -405,13 +418,72 @@ func (b *Broker) info() ServerInfo { return b.opts.Info }
 
 // ---- login ----
 
+type loginView struct {
+	NoPassword bool // show how to set one
+	Form       bool
+	PwLink     bool
+	SSO        string // button label, empty without SSO
+	SSODown    bool
+}
+
+func (u *ui) loginView(r *http.Request, discover bool) loginView {
+	pw, _ := u.b.store.GetSetting("admin_password")
+	_, wantPw := r.URL.Query()["password"]
+	if u.b.sso == nil {
+		return loginView{NoPassword: pw == "", Form: pw != ""}
+	}
+	v := loginView{SSO: u.b.sso.cfg.Name}
+	if discover {
+		_, err := u.b.sso.get()
+		v.SSODown = err != nil
+	} else {
+		ok, _ := u.b.sso.status()
+		v.SSODown = !ok
+	}
+	v.Form = pw != "" && (wantPw || v.SSODown)
+	v.PwLink = pw != "" && !v.Form
+	v.NoPassword = pw == "" && (wantPw || v.SSODown)
+	return v
+}
+
+// loginPage goes straight on to the SSO provider unless the visitor asked for
+// the password form, a notice is waiting, or the provider is unreachable.
+// A failed SSO callback shows this page itself (see loginFailed), so this
+// can't loop.
 func (u *ui) loginPage(w http.ResponseWriter, r *http.Request) {
 	if u.session(r) != nil {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 		return
 	}
-	pw, _ := u.b.store.GetSetting("admin_password")
-	u.render(w, r, nil, "login", "", "Sign in", map[string]bool{"NoPassword": pw == ""})
+	v := u.loginView(r, true)
+	_, wantPw := r.URL.Query()["password"]
+	_, noticeErr := r.Cookie(noticeCookie)
+	if v.SSO != "" && !v.SSODown && !wantPw && noticeErr != nil {
+		http.Redirect(w, r, "/ui/oidc/login", http.StatusFound)
+		return
+	}
+	u.render(w, r, nil, "login", "", "Sign in", v)
+}
+
+// loginFailed shows the login page with msg, in place of a redirect: the
+// SSO callback is the end of a cross-site redirect chain, so a notice cookie
+// (SameSite=Strict) would not be sent to /ui/login and the visitor would go
+// straight back to the provider.
+func (u *ui) loginFailed(w http.ResponseWriter, r *http.Request, code int, msg string) {
+	u.renderPage(w, nil, code, "login", page{Title: "Sign in", Err: msg, Data: u.loginView(r, false)})
+}
+
+func (u *ui) startSession(w http.ResponseWriter, r *http.Request, user, method string, now time.Time, ip string) error {
+	id := randToken(32)
+	if err := u.b.store.CreateSession(sha256Hex(id), randToken(32), ip, user, now, now.Add(sessionTTL)); err != nil {
+		return err
+	}
+	u.b.audit(&RequestRow{TS: now, Event: "ui_login", Client: user, IP: ip, Reason: method})
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Secure: u.b.viaHTTPS(r), MaxAge: int(sessionTTL.Seconds()),
+	})
+	return nil
 }
 
 func (u *ui) login(w http.ResponseWriter, r *http.Request) {
@@ -430,22 +502,21 @@ func (u *ui) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.b.loginLim.refund(limKey, now)
-	id := randToken(32)
-	if err := u.b.store.CreateSession(sha256Hex(id), randToken(32), ip, now, now.Add(sessionTTL)); err != nil {
+	if err := u.startSession(w, r, "admin", "password", now, ip); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookie, Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
-		Secure: u.b.viaHTTPS(r), MaxAge: int(sessionTTL.Seconds()),
-	})
 	http.Redirect(w, r, "/ui/", http.StatusSeeOther)
+}
+
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 }
 
 func (u *ui) logout(w http.ResponseWriter, r *http.Request, s *session) {
 	u.b.store.DeleteSession(s.idSHA)
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
-	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+	clearSessionCookie(w)
+	back(w, r, "/ui/login", "Signed out.", nil)
 }
 
 // ---- dashboard / tokens / history ----
@@ -496,7 +567,7 @@ func (u *ui) history(w http.ResponseWriter, r *http.Request, s *session) {
 	sort.Strings(clients)
 	u.render(w, r, s, "history", "history", "Request history", map[string]any{
 		"Rows": rows, "Filter": f, "Next": next, "Clients": clients,
-		"Events": []string{"issued", "listed", "denied", "error", "revoked", "invalidated"},
+		"Events": []string{"issued", "listed", "denied", "error", "revoked", "invalidated", "ui_login", "ui_password"},
 	})
 }
 
@@ -857,15 +928,42 @@ func (u *ui) moveGrant(w http.ResponseWriter, r *http.Request, s *session) {
 
 // ---- settings ----
 
+type ssoView struct {
+	OIDCConfig
+	Public bool
+	OK     bool
+	Status string
+}
+
 func (u *ui) settings(w http.ResponseWriter, r *http.Request, s *session) {
 	total, wal := u.b.store.DiskUsage()
-	u.render(w, r, s, "settings", "settings", "Settings", struct{ DBSize, WALSize int64 }{total, wal})
+	pw, _ := u.b.store.GetSetting("admin_password")
+	var sv *ssoView
+	if u.b.sso != nil {
+		sv = &ssoView{OIDCConfig: u.b.sso.cfg, Public: u.b.sso.cfg.ClientSecret == ""}
+		sv.ClientSecret = ""
+		sv.OK, sv.Status = u.b.sso.status()
+	}
+	u.render(w, r, s, "settings", "settings", "Settings", struct {
+		DBSize, WALSize int64
+		HasPassword     bool
+		SSO             *ssoView
+	}{total, wal, pw != "", sv})
+}
+
+func (u *ui) signOutAll(w http.ResponseWriter, r *http.Request, s *session) {
+	u.b.store.DeleteAllSessions()
+	clearSessionCookie(w)
+	back(w, r, "/ui/login", "All sessions signed out.", nil)
 }
 
 func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s *session) {
 	err := func() error {
-		stored, _ := u.b.store.GetSetting("admin_password")
-		if !checkPassword(stored, r.PostFormValue("current")) {
+		stored, err := u.b.store.GetSetting("admin_password")
+		if err != nil {
+			return err
+		}
+		if stored != "" && !checkPassword(stored, r.PostFormValue("current")) {
 			return errors.New("current password is wrong")
 		}
 		np := r.PostFormValue("new")
@@ -883,6 +981,11 @@ func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s *session) 
 			return err
 		}
 		u.b.store.DeleteAllSessions()
+		reason := "admin password changed"
+		if stored == "" {
+			reason = "admin password set"
+		}
+		u.b.audit(&RequestRow{TS: u.b.now(), Event: "ui_password", Client: s.user, IP: u.b.clientIP(r).String(), Reason: reason})
 		return nil
 	}()
 	if err != nil {

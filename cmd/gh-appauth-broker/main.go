@@ -33,7 +33,7 @@ const usage = `gh-appauth-broker: GitHub App token broker
 Usage:
   gh-appauth-broker serve [flags]   run the broker (see serve -h)
   gh-appauth-broker check           validate the stored configuration and keys
-  gh-appauth-broker set-password    set the admin UI password (read from stdin)
+  gh-appauth-broker set-password    set the admin UI password (read from stdin; -clear removes it)
   gh-appauth-broker fingerprint     print the self-signed certificate fingerprint
   gh-appauth-broker version         print the broker version
 
@@ -173,6 +173,15 @@ type serveConfig struct {
 	GitHubAPI       string
 	HistoryDays     int
 	TokensPerMinute int
+
+	OIDCIssuer           string
+	OIDCClientID         string
+	OIDCClientSecretFile string
+	OIDCRedirectURL      string
+	OIDCAllowedGroups    string
+	OIDCGroupsClaim      string
+	OIDCScopes           string
+	OIDCName             string
 }
 
 func cmdServe(args []string) error {
@@ -189,6 +198,14 @@ func cmdServe(args []string) error {
 	fs.StringVar(&c.GitHubAPI, "github-api", "https://api.github.com", "GitHub API base `URL`")
 	fs.IntVar(&c.HistoryDays, "history-days", 30, "keep request history for this many `days`")
 	fs.IntVar(&c.TokensPerMinute, "tokens-per-minute", defaultTokensPerMinute, "allow each client `N` token requests and repo listings per minute")
+	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", "", "OIDC issuer `URL`; enables single sign-on to the admin UI")
+	fs.StringVar(&c.OIDCClientID, "oidc-client-id", "", "OIDC client `ID`")
+	fs.StringVar(&c.OIDCClientSecretFile, "oidc-client-secret-file", "", "`file` holding the OIDC client secret; omit for a public client")
+	fs.StringVar(&c.OIDCRedirectURL, "oidc-redirect-url", "", "public callback `URL`, ending in "+oidcCallbackPath)
+	fs.StringVar(&c.OIDCAllowedGroups, "oidc-allowed-groups", "", "comma-separated `groups`; members of any of them may sign in (required with -oidc-issuer)")
+	fs.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", "", "ID token or userinfo `claim` holding the groups (default groups)")
+	fs.StringVar(&c.OIDCScopes, "oidc-scopes", "", "comma-separated `scopes` to request instead of "+defaultOIDCScopes+"; openid is always added")
+	fs.StringVar(&c.OIDCName, "oidc-name", "", "provider `name` on the sign-in button (default SSO)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -207,14 +224,7 @@ func isLoopback(addr string) bool {
 		return true
 	}
 	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	if host == "localhost" {
-		return true
-	}
-	ip, err := netip.ParseAddr(host)
-	return err == nil && ip.IsLoopback()
+	return err == nil && loopbackHost(host)
 }
 
 func listen(addr string) (net.Listener, error) {
@@ -285,6 +295,10 @@ func serve(c serveConfig, ready chan<- string) error {
 			return fmt.Errorf("-trusted-proxies: %w", err)
 		}
 	}
+	oidcCfg, err := oidcConfig(c)
+	if err != nil {
+		return err
+	}
 	st, err := OpenStore(c.DB)
 	if err != nil {
 		return err
@@ -327,12 +341,15 @@ func serve(c serveConfig, ready chan<- string) error {
 	}
 	b, err := NewBroker(st, Options{
 		GitHubAPI: c.GitHubAPI, TrustedProxies: trusted, HistoryDays: c.HistoryDays,
-		TokensPerMinute: c.TokensPerMinute, SecureCookies: certs != nil, Info: info,
+		TokensPerMinute: c.TokensPerMinute, SecureCookies: certs != nil, Info: info, OIDC: oidcCfg,
 	})
 	if err != nil {
 		return fmt.Errorf("invalid configuration in %s: %w", c.DB, err)
 	}
-	if pw, _ := st.GetSetting("admin_password"); pw == "" && c.UIListen != "off" {
+	if b.sso != nil {
+		go b.sso.get()
+	}
+	if pw, _ := st.GetSetting("admin_password"); pw == "" && c.UIListen != "off" && b.sso == nil {
 		fmt.Fprintf(os.Stderr, "gh-appauth-broker: no admin password set; run `gh-appauth-broker set-password -db %s` to use the web UI\n", c.DB)
 	}
 
@@ -520,12 +537,26 @@ func cmdFingerprint(args []string) error {
 func cmdSetPassword(args []string) error {
 	fs := flag.NewFlagSet("set-password", flag.ExitOnError)
 	dbPath := dbFlag(fs)
+	clear := fs.Bool("clear", false, "remove the admin password, so that only single sign-on works")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	db, err := dbPath()
 	if err != nil {
 		return err
+	}
+	if *clear {
+		st, err := OpenStore(db)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		if err := st.DeleteSetting("admin_password"); err != nil {
+			return err
+		}
+		st.DeleteAllSessions()
+		fmt.Fprintln(os.Stderr, "admin password removed; the admin UI now only accepts single sign-on (-oidc-issuer)")
+		return nil
 	}
 	pw, err := readPassword("New admin password: ")
 	if err != nil {

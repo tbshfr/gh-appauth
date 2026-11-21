@@ -17,8 +17,17 @@ gh-appauth-broker serve [flags]
   -github-api URL      default https://api.github.com (GitHub Enterprise: https://HOST/api/v3)
   -history-days N      request history retention (default 30)
   -tokens-per-minute N  token requests and repo listings per minute per client (default 60)
+  -oidc-issuer URL     turn on single sign-on to the admin UI (see below)
+  -oidc-client-id ID
+  -oidc-client-secret-file FILE  omit for a public client
+  -oidc-redirect-url URL         public URL of the UI plus /ui/oidc/callback
+  -oidc-allowed-groups LIST      required with -oidc-issuer
+  -oidc-groups-claim NAME        default groups
+  -oidc-scopes LIST              default profile,email,groups; openid is always added
+  -oidc-name TEXT                provider name on the sign-in button (default SSO)
 
 gh-appauth-broker set-password               admin UI password (stdin; ≥10 chars; logs out all sessions)
+gh-appauth-broker set-password -clear        remove the password, leaving only single sign-on
 gh-appauth-broker check                      validate stored config and keys
 gh-appauth-broker fingerprint                self-signed certificate SHA-256
 (all of these also take -data-dir DIR or -db FILE)
@@ -41,7 +50,7 @@ This is handy in containers. For example, in a Docker Compose service:
       GH_APPAUTH_BROKER_TOKENS_PER_MINUTE: "240"
 ```
 
-No flag takes a secret as its value. A future flag that needs one will take a file instead (`-something-file`), so its variable will be `GH_APPAUTH_BROKER_SOMETHING_FILE` and hold a path, which works with Docker and Compose secrets.
+No flag takes a secret as its value. The OIDC client secret is read from a file, so `GH_APPAUTH_BROKER_OIDC_CLIENT_SECRET_FILE` holds a path, which works with Docker and Compose secrets.
 
 ## TLS modes
 
@@ -60,14 +69,41 @@ Clients never turn verification off. With `--fingerprint`, the certificate has t
 | Dashboard | Counts for the last 24 hours, active tokens (client, repo, App, permissions, expiry, reuse count, Revoke button), recent requests. |
 | Clients | Create, disable or delete clients, IP allowlists, secrets (generate, rotate, remove) with the setup command for the client machine, grants (ordered; first match wins), per-client tokens and history. |
 | Apps | Add or replace Apps (paste or upload a `.pem`), test them against GitHub, delete Apps that no grant uses. |
-| History | Every token request, repo listing, denial, error, revocation and invalidation, filterable by client, event and repo. |
-| Settings | Server settings (read-only), TLS fingerprint, password change. |
+| History | Every token request, repo listing, denial, error, revocation, invalidation and admin UI sign-in, filterable by client, event and repo. |
+| Settings | Server settings (read-only), TLS fingerprint, single sign-on status, sign out all sessions, password change. |
 
-The UI requires the admin password. Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, cookies are `SameSite=Strict`, and a strict CSP is set. The session cookie is `Secure` when the broker serves TLS, or when a trusted proxy (`-trusted-proxies`) sends `X-Forwarded-Proto: https`. Failed logins are limited per source address (per /64 for IPv6), separately from API authentication failures.
+The UI requires the admin password or [single sign-on](#single-sign-on-oidc). Sessions last 12 hours and are stored in SQLite. Forms carry CSRF tokens, the session cookie is `SameSite=Strict`, and a strict CSP is set. The session cookie is `Secure` when the broker serves TLS, or when a trusted proxy (`-trusted-proxies`) sends `X-Forwarded-Proto: https`. Failed logins are limited per source address (per /64 for IPv6), separately from API authentication failures.
 
 To keep the UI away from agents, put it on its own port, for example `-ui-listen 127.0.0.1:8444`, and reach it through an SSH tunnel, or firewall that port.
 
 The UI can be installed as an app (a PWA) from Chrome, Edge or Safari's install or "Add to Dock / Home Screen" option. Browsers allow this only on a secure origin: HTTPS with a certificate the browser trusts, or `http://localhost`, which includes an SSH tunnel to a local port. The installed app opens in its own window at `/ui/`. It caches nothing. Its service worker only shows an offline page when the broker can't be reached.
+
+## Single sign-on (OIDC)
+
+The admin UI can sign in through any OpenID Connect provider. Register the broker there as a web application using the authorization code flow, with the redirect URL `https://BROKER/ui/oidc/callback` (the address your browser uses for the UI), then start the broker with:
+
+```
+-oidc-issuer https://id.example.com
+-oidc-client-id gh-appauth
+-oidc-client-secret-file /etc/gh-appauth/oidc-secret
+-oidc-redirect-url https://broker.example.com:8444/ui/oidc/callback
+-oidc-allowed-groups broker-admins
+```
+
+`-oidc-issuer` has to match the `issuer` in the provider's discovery document exactly, trailing slash included. The issuer and redirect URL must use `https://`, except on localhost. The secret file is read once at startup and a trailing newline is ignored. Leave out `-oidc-client-secret-file` for a public client, which then relies on PKCE alone. The broker always uses PKCE. Starting with any `-oidc-*` flag but no issuer, with `-ui-listen off`, or without `-oidc-allowed-groups` is an error.
+
+**Who gets in.** The broker reads the claim named by `-oidc-groups-claim` from the ID token. If the ID token has no such claim, it asks the userinfo endpoint, whose `sub` must match the ID token's. Membership in any one of `-oidc-allowed-groups` signs the user in; names are compared exactly, case included. The claim may be a list of strings, a single string, or an object whose keys are the group names (as in Zitadel's role claims). Anything else counts as no groups, and a claim that is present but empty is not looked up in userinfo. Everyone who gets in shares the one admin account. The name they signed in with (`preferred_username`, else `email`, `name` or `sub`) is shown as "Signed in as" and recorded as a `ui_login` event in the history. A refused sign-in is recorded as `denied`.
+
+**Password and SSO together.** Password sign-in stays available as long as a password is set. `gh-appauth-broker set-password -clear` removes it, leaving SSO as the only way in. To get back in when the provider is down, run `set-password` on the broker host; it takes effect at once, without a restart. When no password is set, an admin signed in through SSO can set one on the Settings page. Setting or changing the password is recorded as a `ui_password` event.
+
+**Redirects.** With SSO configured, `/ui/login` goes straight to the provider. It shows the sign-in page instead after you sign out or a sign-in fails, while the provider can't be reached, and when the URL has `?password` (`/ui/login?password`), which shows the password form. The page links there when a password is set. The broker looks up the provider in the background at startup and logs the result; while that fails, it tries again on a sign-in at most every 10 seconds. The token API never waits for the provider. Open the UI on the same host name as the redirect URL: the sign-in cookie belongs to one host, so starting at `127.0.0.1` with a `localhost` redirect URL ends in "Sign-in expired".
+
+**Revocation.** Removing someone from the group only stops their next sign-in. Sessions last 12 hours; "Sign out all sessions" on the Settings page ends every open one. Signing out of the broker does not sign you out of the provider. Anyone signed in can set or change the admin password, so when you remove someone, also change the password if one is set (or clear it with `set-password -clear`).
+
+Two warnings:
+
+- The groups claim must be one only the provider's administrators control, never an attribute users can edit themselves. A provider with open self-registration is fine only if users can't add themselves to the group.
+- In Zitadel, if the project is granted to other organizations, their administrators can assign its roles, and with them access to the broker.
 
 ## HTTP API
 

@@ -9,7 +9,7 @@ To work on the admin UI, `scripts/dev.sh` runs the broker against the fake GitHu
 
 `scripts/e2e.sh` runs offline. It builds both binaries, starts a fake GitHub API that checks App JWT signatures, configures the broker through the admin UI, and drives real `git` and the `gh` shim against it in all three TLS modes. Set `KEEP=1` to keep its work directory afterwards.
 
-The broker's only third-party dependency is `modernc.org/sqlite`, a pure-Go SQLite with no cgo, so cross-compiling stays easy. The extension uses the standard library only.
+The broker's third-party dependencies are `modernc.org/sqlite`, a pure-Go SQLite with no cgo, so cross-compiling stays easy, and `golang.org/x/oauth2` and `github.com/coreos/go-oidc/v3` for single sign-on. The extension uses the standard library only.
 
 `scripts/release.sh [VERSION]` builds the release binaries into `dist/`.
 
@@ -20,6 +20,7 @@ internal/repo        owner/repo parsing shared by both binaries
 internal/api         JSON types shared by both binaries
 internal/buildinfo   version stamp shared by both binaries
 internal/fakegithub  fake GitHub API (verifies RS256 App JWTs) for tests and e2e
+internal/fakeoidc    fake OIDC provider (checks client auth, codes, PKCE) for tests
 cmd/gh-appauth/      gh extension
   main.go            CLI: setup, status, token, repos
   config.go          client config
@@ -36,6 +37,7 @@ cmd/gh-appauth-broker/
   server.go          API: auth, rate limits, grants, narrowing, cache, audit
   tlsconf.go         TLS modes, self-signed certificate
   ui.go, ui/         admin UI (embedded templates and assets)
+  oidc.go            admin UI single sign-on: flags, discovery, callback, groups
 deploy/              systemd unit, Caddyfile
 scripts/dev.sh       broker with seeded data for UI work
 scripts/e2e.sh       end-to-end test

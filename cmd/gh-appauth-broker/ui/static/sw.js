@@ -8,7 +8,7 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.mode !== "navigate") return;
+  if (event.request.mode !== "navigate" || new URL(event.request.url).pathname.startsWith("/ui/oidc/")) return;
   event.respondWith((async () => {
     try {
       return (await event.preloadResponse) || (await fetch(event.request));
