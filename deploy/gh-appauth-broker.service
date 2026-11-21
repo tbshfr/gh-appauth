@@ -25,6 +25,16 @@ ExecStart=/usr/local/bin/gh-appauth-broker serve -data-dir /var/lib/gh-appauth-b
 #                                 the extension's cache off
 # Each flag can also be set with Environment=, e.g.
 # Environment=GH_APPAUTH_BROKER_TOKENS_PER_MINUTE=240 (see docs/broker.md).
+#
+# Single sign-on to the admin UI (docs/broker.md). The client secret arrives as
+# a credential, which the dynamic user can read:
+#LoadCredential=oidc-secret:/etc/gh-appauth/oidc-secret
+# and add to ExecStart (the redirect URL is the address your browser uses for
+# the UI, here through an SSH tunnel to port 8444):
+#   -oidc-issuer https://id.example.com -oidc-client-id gh-appauth
+#   -oidc-client-secret-file %d/oidc-secret
+#   -oidc-redirect-url http://localhost:8444/ui/oidc/callback
+#   -oidc-allowed-groups broker-admins
 ExecReload=/bin/kill -HUP $MAINPID
 
 StateDirectory=gh-appauth-broker

@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 	csrf       TEXT NOT NULL,
 	ip         TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
-	expires_at INTEGER NOT NULL
+	expires_at INTEGER NOT NULL,
+	user       TEXT NOT NULL DEFAULT ''
 );
 `
 
@@ -124,7 +125,25 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	if err := addColumn(db, "sessions", "user", `TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("upgrade schema: %w", err)
+	}
 	return &Store{db: db, path: path}, nil
+}
+
+// addColumn adds a column that CREATE TABLE IF NOT EXISTS can't add to a
+// table from an older version.
+func addColumn(db *sql.DB, table, col, def string) error {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, col).Scan(&n); err != nil || n > 0 {
+		return err
+	}
+	_, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + def)
+	if err != nil && strings.Contains(err.Error(), "duplicate column") { // another process just added it
+		return nil
+	}
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -151,6 +170,11 @@ func (s *Store) GetSetting(key string) (string, error) {
 		return "", nil
 	}
 	return v, err
+}
+
+func (s *Store) DeleteSetting(key string) error {
+	_, err := s.db.Exec(`DELETE FROM settings WHERE key=?`, key)
+	return err
 }
 
 func (s *Store) SetSetting(key, value string) error {
@@ -582,7 +606,7 @@ func (s *Store) Requests(f RequestFilter) ([]*RequestRow, error) {
 	q := `SELECT id, ts, event, status, client, ip, repo, app, perms, cached, reason FROM requests WHERE 1=1`
 	var args []any
 	if f.Client != "" {
-		q += ` AND client=?`
+		q += ` AND client=? AND event NOT IN ('ui_login', 'ui_password')`
 		args = append(args, f.Client)
 	}
 	if f.Repo != "" {
@@ -648,16 +672,16 @@ func (s *Store) PruneRequests(before time.Time) (int64, error) {
 
 // ---- sessions ----
 
-func (s *Store) CreateSession(idSHA, csrf, ip string, now, exp time.Time) error {
+func (s *Store) CreateSession(idSHA, csrf, ip, user string, now, exp time.Time) error {
 	_, _ = s.db.Exec(`DELETE FROM sessions WHERE expires_at<?`, now.Unix())
-	_, err := s.db.Exec(`INSERT INTO sessions(id_sha256, csrf, ip, created_at, expires_at) VALUES(?,?,?,?,?)`,
-		idSHA, csrf, ip, now.Unix(), exp.Unix())
+	_, err := s.db.Exec(`INSERT INTO sessions(id_sha256, csrf, ip, user, created_at, expires_at) VALUES(?,?,?,?,?,?)`,
+		idSHA, csrf, ip, user, now.Unix(), exp.Unix())
 	return err
 }
 
-func (s *Store) Session(idSHA string, now time.Time) (csrf string, ok bool) {
-	err := s.db.QueryRow(`SELECT csrf FROM sessions WHERE id_sha256=? AND expires_at>?`, idSHA, now.Unix()).Scan(&csrf)
-	return csrf, err == nil
+func (s *Store) Session(idSHA string, now time.Time) (csrf, user string, ok bool) {
+	err := s.db.QueryRow(`SELECT csrf, user FROM sessions WHERE id_sha256=? AND expires_at>?`, idSHA, now.Unix()).Scan(&csrf, &user)
+	return csrf, user, err == nil
 }
 
 func (s *Store) DeleteSession(idSHA string) {

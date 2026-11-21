@@ -1,5 +1,16 @@
 {{define "content"}}
 <section class="card">
+  {{if .Data.SSO}}
+  <header class="card-head"><h2>Sign in</h2></header>
+  <div class="card-body">
+    {{if .Data.SSODown}}<p class="hint">The SSO provider can't be reached right now; the broker log has the details.</p>{{end}}
+    <a class="btn primary block" href="/ui/oidc/login">Sign in with {{.Data.SSO}}</a>
+    {{if .Data.Form}}{{template "pwform" false}}{{end}}
+  </div>
+  {{else if .Data.Form}}
+  <header class="card-head"><h2>Sign in</h2></header>
+  <div class="card-body">{{template "pwform" true}}</div>
+  {{end}}
   {{if .Data.NoPassword}}
   <header class="card-head">
     <div>
@@ -10,15 +21,14 @@
   <div class="card-body">
     <pre>gh-appauth-broker set-password -db {{.Info.DBPath}}</pre>
   </div>
-  {{else}}
-  <header class="card-head"><h2>Sign in</h2></header>
-  <div class="card-body">
-    <form method="post" action="/ui/login" class="form">
-      <label class="field"><span class="label">Admin password</span>
-        <input type="password" name="password" autofocus required autocomplete="current-password"></label>
-      <button class="primary">Sign in</button>
-    </form>
-  </div>
   {{end}}
 </section>
+{{if .Data.PwLink}}<p class="alt"><a href="/ui/login?password">Sign in with password</a></p>{{end}}
+{{end}}
+{{define "pwform"}}
+<form method="post" action="/ui/login" class="form">
+  <label class="field"><span class="label">Admin password</span>
+    <input type="password" name="password" {{if .}}autofocus{{end}} required autocomplete="current-password"></label>
+  <button {{if .}}class="primary"{{end}}>Sign in{{if not .}} with password{{end}}</button>
+</form>
 {{end}}

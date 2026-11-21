@@ -36,19 +36,55 @@
   </footer>
 </section>
 
+{{with .Data.SSO}}
 <section class="card">
-  <header class="card-head"><h2>Change admin password</h2></header>
+  <header class="card-head">
+    <div>
+      <h2>Single sign-on</h2>
+      <p>Members of an allowed group can sign in through the OIDC provider. Set with the -oidc-* flags.</p>
+    </div>
+  </header>
+  <dl class="kv">
+    <dt>Provider</dt><dd>{{if .OK}}<span class="pill issued">{{.Status}}</span>{{else}}<span class="pill error">unreachable</span> <span class="muted">{{.Status}}</span>{{end}}</dd>
+    <dt>Issuer</dt><dd class="mono">{{.Issuer}}</dd>
+    <dt>Client ID</dt><dd class="mono">{{.ClientID}}{{if .Public}} <span class="muted">(public client)</span>{{end}}</dd>
+    <dt>Redirect URL</dt><dd class="mono">{{.RedirectURL}}</dd>
+    <dt>Scopes</dt><dd class="mono">{{join .Scopes " "}}</dd>
+    <dt>Groups claim</dt><dd class="mono">{{.GroupsClaim}}</dd>
+    <dt>Allowed groups</dt><dd class="mono">{{join .AllowedGroups ", "}}</dd>
+  </dl>
+</section>
+{{end}}
+
+<section class="card">
+  <header class="card-head">
+    <div>
+      <h2>Sessions</h2>
+      <p>Admin UI sessions last 12 hours. Removing someone from an allowed group only stops their next sign-in; sign out everyone to end the sessions that are open now.</p>
+    </div>
+  </header>
+  <footer class="card-foot">
+    <p>Signs out every browser, including this one.</p>
+    <form method="post" action="/ui/settings/sessions/delete" data-confirm="Sign out all admin UI sessions, including this one?">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button class="danger">Sign out all sessions</button>
+    </form>
+  </footer>
+</section>
+
+<section class="card">
+  <header class="card-head">{{if .Data.HasPassword}}<h2>Change admin password</h2>{{else}}<div><h2>Set an admin password</h2><p>No password is set, so only single sign-on works.</p></div>{{end}}</header>
   <div class="card-body">
     <form method="post" action="/ui/settings/password" class="form narrow">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label class="field"><span class="label">Current password</span>
-        <input type="password" name="current" required autocomplete="current-password"></label>
+      {{if .Data.HasPassword}}<label class="field"><span class="label">Current password</span>
+        <input type="password" name="current" required autocomplete="current-password"></label>{{end}}
       <label class="field"><span class="label">New password</span>
         <input type="password" name="new" required minlength="10" autocomplete="new-password">
         <span class="hint">At least 10 characters.</span></label>
       <label class="field"><span class="label">Confirm new password</span>
         <input type="password" name="confirm" required minlength="10" autocomplete="new-password"></label>
-      <div><button class="primary">Change password</button></div>
+      <div><button class="primary">{{if .Data.HasPassword}}Change{{else}}Set{{end}} password</button></div>
     </form>
   </div>
 </section>
