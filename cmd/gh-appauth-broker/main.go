@@ -39,6 +39,9 @@ Usage:
 
 Every command takes -data-dir DIR or -db FILE. The database defaults to
 data/broker.db next to the gh-appauth-broker binary.
+
+Every flag can also be set from the environment: -ui-listen is
+GH_APPAUTH_BROKER_UI_LISTEN. A flag on the command line wins.
 `
 
 func main() {
@@ -70,25 +73,72 @@ func main() {
 	}
 }
 
+// envPrefix starts the environment variable for every flag: -ui-listen is
+// $GH_APPAUTH_BROKER_UI_LISTEN.
+const envPrefix = "GH_APPAUTH_BROKER_"
+
+func envName(flagName string) string {
+	return envPrefix + strings.ToUpper(strings.ReplaceAll(flagName, "-", "_"))
+}
+
+// parseFlags parses args, then fills every flag that wasn't on the command
+// line from its environment variable (see envName). Precedence: command line,
+// environment, built-in default. An empty variable counts as unset. Values go
+// through the flag's own Set, so they are parsed and checked like on the
+// command line. It also adds each flag's variable to its -h text.
+//
+// Environment values are set with Value.Set, not fs.Set, so fs.Visit still
+// lists only the flags given on the command line.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	fs.VisitAll(func(f *flag.Flag) {
+		if env := " (env " + envName(f.Name) + ")"; !strings.HasSuffix(f.Usage, env) {
+			f.Usage += env
+		}
+	})
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	onCmdLine := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { onCmdLine[f.Name] = true })
+	var err error
+	fs.VisitAll(func(f *flag.Flag) {
+		name := envName(f.Name)
+		v := os.Getenv(name)
+		if err != nil || onCmdLine[f.Name] || v == "" {
+			return
+		}
+		if e := f.Value.Set(v); e != nil {
+			err = fmt.Errorf("%s: invalid value %q: %v", name, v, e)
+		}
+	})
+	// Fail like a bad command-line flag does: exit 2, so scripts can tell a
+	// configuration error from a runtime failure.
+	if err != nil && fs.ErrorHandling() == flag.ExitOnError {
+		fmt.Fprintf(fs.Output(), "gh-appauth-broker: %v\n", err)
+		os.Exit(2)
+	}
+	return err
+}
+
 // dbFlag registers -data-dir and -db and returns a function that resolves the
-// database path once flags are parsed. Precedence: -db, -data-dir,
-// $GH_APPAUTH_BROKER_DB, $GH_APPAUTH_BROKER_DATA_DIR, then data/ next to the
-// binary.
+// database path once parseFlags has run. -db beats -data-dir, and anything on
+// the command line beats the environment, so -data-dir on the command line
+// wins over $GH_APPAUTH_BROKER_DB. Without either, the database is data/
+// next to the binary.
 func dbFlag(fs *flag.FlagSet) func() (string, error) {
-	dataDir := fs.String("data-dir", "", "`directory` holding broker.db (env GH_APPAUTH_BROKER_DATA_DIR; default: data/ next to the binary)")
-	db := fs.String("db", "", "SQLite database `file`, overrides -data-dir (env GH_APPAUTH_BROKER_DB)")
+	dataDir := fs.String("data-dir", "", "`directory` holding broker.db; default data/ next to the binary")
+	db := fs.String("db", "", "SQLite database `file`, overrides -data-dir")
 	return func() (string, error) {
+		onCmdLine := map[string]bool{}
+		fs.Visit(func(f *flag.Flag) { onCmdLine[f.Name] = true })
+		if onCmdLine["data-dir"] && !onCmdLine["db"] {
+			*db = "" // -data-dir on the command line beats $GH_APPAUTH_BROKER_DB
+		}
 		switch {
 		case *db != "":
 			return *db, nil
 		case *dataDir != "":
 			return filepath.Join(*dataDir, "broker.db"), nil
-		}
-		if v := os.Getenv("GH_APPAUTH_BROKER_DB"); v != "" {
-			return v, nil
-		}
-		if v := os.Getenv("GH_APPAUTH_BROKER_DATA_DIR"); v != "" {
-			return filepath.Join(v, "broker.db"), nil
 		}
 		dir, err := defaultDataDir()
 		if err != nil {
@@ -139,7 +189,9 @@ func cmdServe(args []string) error {
 	fs.StringVar(&c.GitHubAPI, "github-api", "https://api.github.com", "GitHub API base `URL`")
 	fs.IntVar(&c.HistoryDays, "history-days", 30, "keep request history for this many `days`")
 	fs.IntVar(&c.TokensPerMinute, "tokens-per-minute", defaultTokensPerMinute, "allow each client `N` token requests and repo listings per minute")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	if c.TokensPerMinute < 1 {
 		return fmt.Errorf("-tokens-per-minute must be at least 1 (got %d)", c.TokensPerMinute)
 	}
@@ -399,7 +451,9 @@ func ipStrings(ips []net.IP) []string {
 func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	dbPath := dbFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	db, err := dbPath()
 	if err != nil {
 		return err
@@ -429,7 +483,9 @@ func cmdFingerprint(args []string) error {
 	fs := flag.NewFlagSet("fingerprint", flag.ExitOnError)
 	dbPath := dbFlag(fs)
 	certFile := fs.String("tls-cert", "", "print the fingerprint of this certificate file instead")
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	var certPEM []byte
 	if *certFile != "" {
 		b, err := os.ReadFile(*certFile)
@@ -464,7 +520,9 @@ func cmdFingerprint(args []string) error {
 func cmdSetPassword(args []string) error {
 	fs := flag.NewFlagSet("set-password", flag.ExitOnError)
 	dbPath := dbFlag(fs)
-	fs.Parse(args)
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
 	db, err := dbPath()
 	if err != nil {
 		return err
